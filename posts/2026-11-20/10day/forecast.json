@@ -1,0 +1,107 @@
+{
+  "start": "2026-11-20",
+  "end": "2026-11-29",
+  "low_confidence_from": "2026-11-27",
+  "days": [
+    {
+      "date": "2026-11-20",
+      "code": 51,
+      "label": "Light drizzle",
+      "high_c": 10,
+      "low_c": 5,
+      "rain_chance_pct": 78,
+      "rain_mm": 0.3,
+      "lower_confidence": false
+    },
+    {
+      "date": "2026-11-21",
+      "code": 3,
+      "label": "Cloudy",
+      "high_c": 10,
+      "low_c": 2,
+      "rain_chance_pct": 0,
+      "rain_mm": 0.0,
+      "lower_confidence": false
+    },
+    {
+      "date": "2026-11-22",
+      "code": 3,
+      "label": "Cloudy",
+      "high_c": 9,
+      "low_c": 6,
+      "rain_chance_pct": 9,
+      "rain_mm": 0.0,
+      "lower_confidence": false
+    },
+    {
+      "date": "2026-11-23",
+      "code": 51,
+      "label": "Light drizzle",
+      "high_c": 8,
+      "low_c": 4,
+      "rain_chance_pct": 8,
+      "rain_mm": 0.7,
+      "lower_confidence": false
+    },
+    {
+      "date": "2026-11-24",
+      "code": 3,
+      "label": "Cloudy",
+      "high_c": 6,
+      "low_c": 3,
+      "rain_chance_pct": 21,
+      "rain_mm": 0.0,
+      "lower_confidence": false
+    },
+    {
+      "date": "2026-11-25",
+      "code": 3,
+      "label": "Cloudy",
+      "high_c": 8,
+      "low_c": 4,
+      "rain_chance_pct": 40,
+      "rain_mm": 0.0,
+      "lower_confidence": false
+    },
+    {
+      "date": "2026-11-26",
+      "code": 3,
+      "label": "Cloudy",
+      "high_c": 8,
+      "low_c": 4,
+      "rain_chance_pct": 24,
+      "rain_mm": 0.1,
+      "lower_confidence": false
+    },
+    {
+      "date": "2026-11-27",
+      "code": 3,
+      "label": "Cloudy",
+      "high_c": 6,
+      "low_c": 3,
+      "rain_chance_pct": 36,
+      "rain_mm": 0.0,
+      "lower_confidence": true
+    },
+    {
+      "date": "2026-11-28",
+      "code": 53,
+      "label": "Drizzle",
+      "high_c": 9,
+      "low_c": 5,
+      "rain_chance_pct": 36,
+      "rain_mm": 7.2,
+      "lower_confidence": true
+    },
+    {
+      "date": "2026-11-29",
+      "code": 53,
+      "label": "Drizzle",
+      "high_c": 10,
+      "low_c": 7,
+      "rain_chance_pct": 39,
+      "rain_mm": 1.5,
+      "lower_confidence": true
+    }
+  ]
+}
