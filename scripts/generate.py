@@ -18,6 +18,9 @@ Optional flags:
                 UK time); if GFS fails it falls back to the NASA satellite image,
                 and if that fails too the post has today_chart.png only (see
                 "warnings" in the JSON).
+  --gfs-loop    Daily mode: also build gfs_loop.mp4 (+ gfs_loop.gif when under
+                8 MB), hourly GFS frames 12:00-16:00 UK time. Off by default;
+                a failure only adds a warning.
   --date YYYY-MM-DD
                 Daily mode only: build the daily graphics for another date
   --repo PATH   Path to the kent-weather-images git repo
@@ -1478,33 +1481,61 @@ def fetch_gfs(day: date, hour_local: int = 12, now_utc: datetime | None = None) 
     """
     from datetime import timezone
 
+    return fetch_gfs_series(day, [hour_local], now_utc=now_utc)[0]
+
+
+def _gfs_fetch_one(run: datetime, fh: int, valid: datetime, errors: list[str]) -> dict[str, Any] | None:
+    for source, fetcher in (("NOMADS", _gfs_fetch_nomads), ("AWS", _gfs_fetch_aws)):
+        log(f"  GFS {run:%Y-%m-%d %H}Z +{fh}h via {source}")
+        blob = fetcher(run, fh)
+        if not blob:
+            errors.append(f"{run:%d %HZ}+{fh} {source}: unavailable")
+            continue
+        try:
+            fields = _gfs_decode(blob)
+        except Exception as exc:  # noqa: BLE001
+            log(f"    decode failed: {exc}")
+            errors.append(f"{run:%d %HZ}+{fh} {source}: decode failed ({exc})")
+            continue
+        fields.update({"run": run, "fh": fh, "valid": valid, "source": source})
+        return fields
+    return None
+
+
+def fetch_gfs_series(day: date, hours_local: list[int], now_utc: datetime | None = None) -> list[dict[str, Any]]:
+    """Fetch several valid times on `day`, all from the same (newest usable) GFS run.
+
+    A run is used only if every requested hour is available from it (each
+    hour tries NOMADS, then the AWS open-data bucket); otherwise the next
+    older cycle is tried.
+    """
+    from datetime import timezone
+
     now_utc = now_utc or datetime.now(timezone.utc)
-    valid = gfs_valid_time(day, hour_local)
-    errors = []
+    valids = [gfs_valid_time(day, h) for h in hours_local]
+    errors: list[str] = []
     for run in gfs_run_candidates(now_utc):
-        fh = int((valid - run).total_seconds() // 3600)
-        if fh < 0:
+        fhs = [int((v - run).total_seconds() // 3600) for v in valids]
+        if min(fhs) < 0:
             continue
-        if fh > 384 or (fh > 120 and fh % 3):
-            errors.append(f"{run:%d %HZ}: f{fh} out of range")
+        if any(fh > 384 or (fh > 120 and fh % 3) for fh in fhs):
+            errors.append(f"{run:%d %HZ}: f{max(fhs)} out of range")
             continue
-        for source, fetcher in (("NOMADS", _gfs_fetch_nomads), ("AWS", _gfs_fetch_aws)):
-            log(f"  GFS {run:%Y-%m-%d %H}Z +{fh}h via {source}")
-            blob = fetcher(run, fh)
-            if not blob:
-                errors.append(f"{run:%d %HZ}+{fh} {source}: unavailable")
-                continue
-            try:
-                fields = _gfs_decode(blob)
-            except Exception as exc:  # noqa: BLE001
-                log(f"    decode failed: {exc}")
-                errors.append(f"{run:%d %HZ}+{fh} {source}: decode failed ({exc})")
-                continue
-            fields.update({
-                "run": run, "fh": fh, "valid": valid, "source": source,
-            })
-            return fields
+        out = []
+        for fh, valid in zip(fhs, valids):
+            fields = _gfs_fetch_one(run, fh, valid, errors)
+            if fields is None:
+                break
+            out.append(fields)
+        if len(out) == len(valids):
+            return out
     raise PipelineError("No usable GFS run found: " + "; ".join(errors[-6:]))
+
+
+def gfs_isobar_levels(mslp_hpa_fields: list[np.ndarray]) -> list[int]:
+    lo = int(np.floor(min(np.nanmin(m) for m in mslp_hpa_fields) / 4) * 4)
+    hi = int(np.ceil(max(np.nanmax(m) for m in mslp_hpa_fields) / 4) * 4)
+    return list(range(lo, hi + 1, 4))
 
 
 def _gfs_find_extrema(mslp_s: np.ndarray, lats: np.ndarray, lons: np.ndarray, extent) -> list[tuple[str, float, float, float]]:
@@ -1532,7 +1563,7 @@ def _gfs_find_extrema(mslp_s: np.ndarray, lats: np.ndarray, lons: np.ndarray, ex
     return out
 
 
-def render_gfs_map(fields: dict[str, Any]) -> tuple[Image.Image, dict[str, Any]]:
+def render_gfs_map(fields: dict[str, Any], levels: list[int] | None = None) -> tuple[Image.Image, dict[str, Any]]:
     """Render the map panel (RGB PIL image) with cartopy."""
     import cartopy
 
@@ -1594,9 +1625,8 @@ def render_gfs_map(fields: dict[str, Any]) -> tuple[Image.Image, dict[str, Any]]
                    facecolor="none", edgecolor="#8A97A3", linewidth=0.6, linestyle=(0, (3, 2)), zorder=3)
 
     # Isobars every 4 hPa, 1000 hPa slightly heavier
-    lo = int(np.floor(np.nanmin(mslp_s) / 4) * 4)
-    hi = int(np.ceil(np.nanmax(mslp_s) / 4) * 4)
-    levels = list(range(lo, hi + 1, 4))
+    if levels is None:
+        levels = gfs_isobar_levels([mslp_s])
     widths = [1.9 if lv == 1000 else 1.25 for lv in levels]
     cs = ax.contour(lons, lats, mslp_s, levels=levels, colors=NAVY_DEEP, linewidths=widths,
                     transform=pc, zorder=4)
@@ -1607,6 +1637,20 @@ def render_gfs_map(fields: dict[str, Any]) -> tuple[Image.Image, dict[str, Any]]
     mx, my = (vx1 - vx0) * 0.06, (vy1 - vy0) * 0.06
     spacing = (vx1 - vx0) * 0.38
     gen = contourpy.contour_generator(lons, lats, mslp_s)
+    # Keep isobar labels away from town labels and the Kent tag (label sits to the side)
+    place_boxes = []
+    ux, uy = (vx1 - vx0), (vy1 - vy0)
+    for _name, plon, plat, _dx, _dy, ha in GFS_MAP_CITIES:
+        px, py = proj.transform_point(plon, plat, pc)
+        side = -1 if ha == "right" else 1
+        x_a, x_b = sorted((px - side * 0.03 * ux, px + side * 0.20 * ux))
+        place_boxes.append((x_a, x_b, py - 0.035 * uy, py + 0.06 * uy))
+    kx, ky = proj.transform_point(KENT_POINT[0], KENT_POINT[1], pc)
+    place_boxes.append((kx - 0.06 * ux, kx + 0.17 * ux, ky - 0.07 * uy, ky + 0.05 * uy))
+
+    def _clear_of_places(pt) -> bool:
+        return not any(a0 <= pt[0] <= a1 and b0 <= pt[1] <= b1 for a0, a1, b0, b1 in place_boxes)
+
     manual = []
     for lv in levels:
         for seg in gen.lines(lv):
@@ -1623,9 +1667,17 @@ def render_gfs_map(fields: dict[str, Any]) -> tuple[Image.Image, dict[str, Any]]
             n = max(1, int(d[-1] // spacing))
             for k in range(n):
                 target = d[-1] * (k + 0.5) / n
-                j = int(np.searchsorted(d, target))
-                j = min(j, len(vis) - 1)
-                manual.append((float(vis[j, 0]), float(vis[j, 1])))
+                j0 = min(int(np.searchsorted(d, target)), len(vis) - 1)
+                # Walk outwards along the line to a spot clear of town names / Kent tag
+                for step in range(0, len(vis)):
+                    picked = None
+                    for j in (j0 + step, j0 - step):
+                        if 0 <= j < len(vis) and _clear_of_places(vis[j]):
+                            picked = j
+                            break
+                    if picked is not None:
+                        manual.append((float(vis[picked, 0]), float(vis[picked, 1])))
+                        break
     try:
         labels = ax.clabel(cs, levels=levels, fmt="%d", inline=True, inline_spacing=6,
                            fontsize=12, manual=manual) if manual else []
@@ -1716,8 +1768,18 @@ def _draw_rate_legend(draw: ImageDraw.ImageDraw, x: int, y: int, colours: list[s
     return y + seg_h + (28 if show_ticks else 6)
 
 
-def draw_gfs_chart(fields: dict[str, Any], day: date, path: Path) -> tuple[Path, dict[str, Any]]:
-    panel, meta = render_gfs_map(fields)
+def draw_gfs_chart(
+    fields: dict[str, Any],
+    day: date,
+    path: Path,
+    *,
+    levels: list[int] | None = None,
+    frame: tuple[int, int] | None = None,
+    snow_legend: bool | None = None,
+) -> tuple[Path, dict[str, Any]]:
+    """Draw the GFS pressure & rain chart. With `frame=(i, n)` it draws an
+    animation frame: big valid-time clock + progress dots in the header."""
+    panel, meta = render_gfs_map(fields, levels=levels)
     img = Image.new("RGB", (GFS_W, GFS_H), SOFT_RGB)
     draw = ImageDraw.Draw(img)
 
@@ -1728,27 +1790,55 @@ def draw_gfs_chart(fields: dict[str, Any], day: date, path: Path) -> tuple[Path,
     draw.rectangle((0, header_h - 4, GFS_W, header_h), fill=TEAL_RGB)
     draw.text((56, 28), "Kent Weather", font=pil_font("bold", 54), fill=(255, 255, 255))
     draw.text((56, 96), "GFS model: pressure & rain", font=pil_font("medium", 28), fill=(200, 230, 228))
-    draw.text(
-        (56, 140),
-        f"{format_long_date(day)}  ·  {valid_local:%H:%M} {zone}",
-        font=pil_font("regular", 22), fill=(190, 210, 220),
-    )
-    # Badge: model run
     run = fields["run"]
-    badge = f"{run:%HZ} run  ·  T+{fields['fh']}"
-    bf = pil_font("semibold", 18)
-    tb = draw.textbbox((0, 0), badge, font=bf)
-    bw = tb[2] - tb[0] + 28
-    bx1 = GFS_W - 48
-    draw.rounded_rectangle((bx1 - bw, 40, bx1, 76), radius=18, fill=TEAL_RGB)
-    draw.text((bx1 - bw + 14, 40 + (36 - (tb[3] - tb[1])) / 2 - tb[1]), badge, font=bf, fill=(255, 255, 255))
+    if frame is None:
+        draw.text(
+            (56, 140),
+            f"{format_long_date(day)}  ·  {valid_local:%H:%M} {zone}",
+            font=pil_font("regular", 22), fill=(190, 210, 220),
+        )
+        # Badge: model run
+        badge = f"{run:%HZ} run  ·  T+{fields['fh']}"
+        bf = pil_font("semibold", 18)
+        tb = draw.textbbox((0, 0), badge, font=bf)
+        bw = tb[2] - tb[0] + 28
+        bx1 = GFS_W - 48
+        draw.rounded_rectangle((bx1 - bw, 40, bx1, 76), radius=18, fill=TEAL_RGB)
+        draw.text((bx1 - bw + 14, 40 + (36 - (tb[3] - tb[1])) / 2 - tb[1]), badge, font=bf, fill=(255, 255, 255))
+    else:
+        i, n = frame
+        draw.text((56, 140), f"{format_long_date(day)}  ·  hour by hour",
+                  font=pil_font("regular", 22), fill=(190, 210, 220))
+        # Big clock, right-aligned, fixed position so it never jumps
+        bx1 = GFS_W - 48
+        clock = f"{valid_local:%H:%M}"
+        cf = pil_font("bold", 64)
+        zf = pil_font("semibold", 22)
+        zb = draw.textbbox((0, 0), zone, font=zf)
+        cb = draw.textbbox((0, 0), "00:00", font=cf)  # fixed width reference
+        zw = zb[2] - zb[0]
+        cw = cb[2] - cb[0]
+        box_x0 = bx1 - cw - zw - 22 - 10 - 22
+        draw.rounded_rectangle((box_x0, 30, bx1, 122), radius=20, fill=TEAL_RGB)
+        draw.text((box_x0 + 22 - cb[0], 76 - (cb[1] + cb[3]) / 2), clock, font=cf, fill=(255, 255, 255))
+        draw.text((bx1 - 22 - zw - zb[0], 96 - zb[3]), zone, font=zf, fill=(205, 238, 235))
+        # Progress dots
+        r, gap = 7, 26
+        total_w = (n - 1) * gap
+        dx0 = (box_x0 + bx1) / 2 - total_w / 2
+        for k in range(n):
+            cx = dx0 + k * gap
+            if k == i:
+                draw.ellipse((cx - r, 150 - r, cx + r, 150 + r), fill=(255, 255, 255))
+            else:
+                draw.ellipse((cx - r + 2, 150 - r + 2, cx + r - 2, 150 + r - 2), outline=(150, 200, 200), width=2)
 
     map_y = header_h
     img.paste(panel, (0, map_y))
     draw.line((0, map_y + panel.size[1], GFS_W, map_y + panel.size[1]), fill=(200, 212, 222), width=2)
 
     y = map_y + panel.size[1] + 22
-    if meta["has_snow"]:
+    if meta["has_snow"] if snow_legend is None else snow_legend:
         y = _draw_rate_legend(draw, 56, y, GFS_RAIN_COLOURS, "Rain (mm per hour)", True)
         y = _draw_rate_legend(draw, 56, y - 4, GFS_SNOW_COLOURS, "Snow", False)
     else:
@@ -1757,7 +1847,8 @@ def draw_gfs_chart(fields: dict[str, Any], day: date, path: Path) -> tuple[Path,
     draw.text((56, y), "Lines: sea-level pressure (hPa)  ·  H = high, L = low  ·  closer lines = windier",
               font=pil_font("regular", 17), fill=INK_RGB)
     fy = GFS_H - 34
-    draw.text((56, fy), f"{GFS_CREDIT}  ·  run {run:%d %b %H}Z UTC  ·  raw computer model output",
+    run_txt = f"run {run:%d %b %H}Z UTC" + (f" +{fields['fh']}h" if frame is not None else "")
+    draw.text((56, fy), f"{GFS_CREDIT}  ·  {run_txt}  ·  raw computer model output",
               font=pil_font("regular", 15), fill=MUTED_RGB)
 
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -1773,6 +1864,130 @@ def draw_gfs_chart(fields: dict[str, Any], day: date, path: Path) -> tuple[Path,
         "credit": GFS_CREDIT,
     })
     return path, meta
+
+
+
+GFS_LOOP_HOURS = [12, 13, 14, 15, 16]  # UK local time, hourly frames
+GFS_LOOP_FRAME_S = 0.9
+GFS_LOOP_LAST_S = 2.0
+GFS_LOOP_MP4_PASSES = 2  # play the sequence twice in the MP4 (GIF loops forever)
+GFS_LOOP_GIF_MAX = 8_000_000
+
+
+def build_gfs_loop(day: date, out_dir: Path, *, gif: bool = True) -> tuple[list[Path], dict[str, Any]]:
+    """Hourly GFS pressure & rain animation (12:00-16:00 UK time, one run)."""
+    from scipy.ndimage import gaussian_filter
+
+    t0 = time.time()
+    log("Fetching NOAA GFS hourly frames for the loop…")
+    series = fetch_gfs_series(day, GFS_LOOP_HOURS)
+    levels = gfs_isobar_levels([gaussian_filter(f["mslp"] / 100.0, sigma=2.0, mode="nearest") for f in series])
+    # Snow legend fixed across frames (shown if any frame has meaningful snow)
+    snow_any = False
+    n = len(series)
+    out_files: list[Path] = []
+    with tempfile.TemporaryDirectory(prefix="kw_gfs_loop_") as tmp:
+        tmpd = Path(tmp)
+        frame_paths, metas = [], []
+        for i, f in enumerate(series):
+            pth, meta = draw_gfs_chart(f, day, tmpd / f"frame_{i:02d}.png", levels=levels, frame=(i, n),
+                                       snow_legend=False)
+            frame_paths.append(pth)
+            metas.append(meta)
+        if any(m["has_snow"] for m in metas):
+            snow_any = True
+            frame_paths, metas = [], []
+            for i, f in enumerate(series):
+                pth, meta = draw_gfs_chart(f, day, tmpd / f"frame_{i:02d}.png", levels=levels, frame=(i, n),
+                                           snow_legend=True)
+                frame_paths.append(pth)
+                metas.append(meta)
+
+        # --- MP4 (H.264 / yuv420p / 1080x1350) ---
+        if not which("ffmpeg"):
+            raise PipelineError("ffmpeg is not installed")
+        fps = 10
+        per = max(1, round(GFS_LOOP_FRAME_S * fps))
+        last = max(per, round(GFS_LOOP_LAST_S * fps))
+        seq: list[Path] = []
+        for _ in range(GFS_LOOP_MP4_PASSES):
+            for i, fpth in enumerate(frame_paths):
+                seq += [fpth] * (last if i == n - 1 else per)
+        seq_dir = tmpd / "seq"
+        seq_dir.mkdir()
+        for k, src in enumerate(seq):
+            os.symlink(src, seq_dir / f"{k:04d}.png")
+        mp4 = out_dir / "gfs_loop.mp4"
+        cmd = [
+            "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+            "-framerate", str(fps), "-i", str(seq_dir / "%04d.png"),
+            "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-profile:v", "high",
+            "-crf", "20", "-preset", "slow", "-r", str(fps),
+            "-movflags", "+faststart", "-an", str(mp4),
+        ]
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+        if proc.returncode != 0:
+            raise PipelineError(f"ffmpeg failed: {proc.stderr.strip() or proc.returncode}")
+        out_files.append(mp4)
+        log(f"wrote {mp4} ({mp4.stat().st_size} bytes)")
+
+        # --- GIF (loops forever) ---
+        gif_info: dict[str, Any] = {"made": False}
+        if gif:
+            try:
+                ims = [Image.open(fp_).convert("RGB") for fp_ in frame_paths]
+                # One shared adaptive palette so colours don't flicker between frames
+                strip = Image.new("RGB", (ims[0].width, ims[0].height * len(ims)))
+                for k, im in enumerate(ims):
+                    strip.paste(im, (0, k * ims[0].height))
+                pal = strip.quantize(colors=128, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.NONE)
+                q = [im.quantize(palette=pal, dither=Image.Dither.NONE) for im in ims]
+                durations = [int(GFS_LOOP_FRAME_S * 1000)] * (n - 1) + [int(GFS_LOOP_LAST_S * 1000)]
+                gpath = out_dir / "gfs_loop.gif"
+                q[0].save(gpath, save_all=True, append_images=q[1:], duration=durations, loop=0,
+                          optimize=True, disposal=1)
+                size = gpath.stat().st_size
+                if size > GFS_LOOP_GIF_MAX:
+                    log(f"  GIF is {size} bytes (> {GFS_LOOP_GIF_MAX}); dropping it")
+                    gpath.unlink()
+                    gif_info = {"made": False, "reason": f"too large ({size} bytes)"}
+                else:
+                    out_files.append(gpath)
+                    gif_info = {"made": True, "bytes": size}
+                    log(f"wrote {gpath} ({size} bytes)")
+            except Exception as exc:  # noqa: BLE001
+                log(f"  GIF failed: {exc}")
+                gif_info = {"made": False, "reason": str(exc)}
+
+    duration = None
+    if which("ffprobe"):
+        pr = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                             "-of", "default=noprint_wrappers=1:nokey=1", str(mp4)],
+                            capture_output=True, text=True)
+        try:
+            duration = round(float(pr.stdout.strip()), 2)
+        except ValueError:
+            pass
+    run = series[0]["run"]
+    meta = {
+        "run_utc": run.strftime("%Y-%m-%dT%H:%MZ"),
+        "source": sorted({f["source"] for f in series}),
+        "frames": [
+            {"valid_local": f["valid"].astimezone(TZ).isoformat(), "forecast_hour": f["fh"]}
+            for f in series
+        ],
+        "frame_seconds": GFS_LOOP_FRAME_S,
+        "last_frame_seconds": GFS_LOOP_LAST_S,
+        "mp4": {"bytes": mp4.stat().st_size, "duration_s": duration, "passes": GFS_LOOP_MP4_PASSES,
+                "fps": fps, "size": [GFS_W, GFS_H]},
+        "gif": gif_info,
+        "isobar_levels_hpa": [levels[0], levels[-1]],
+        "snow_legend": snow_any,
+        "credit": GFS_CREDIT,
+        "seconds_taken": round(time.time() - t0, 1),
+    }
+    return out_files, meta
 
 
 # ---------------------------------------------------------------------------
@@ -2277,6 +2492,8 @@ def file_entry(repo: Path, path: Path) -> dict[str, Any]:
         kind, mime = "image", "image/png"
     elif suffix == ".mp4":
         kind, mime = "video", "video/mp4"
+    elif suffix == ".gif":
+        kind, mime = "image", "image/gif"
     else:
         kind, mime = "file", "application/octet-stream"
     info: dict[str, Any] = {
@@ -2287,7 +2504,7 @@ def file_entry(repo: Path, path: Path) -> dict[str, Any]:
         "url": public_url(rel),
         "bytes": path.stat().st_size,
     }
-    if suffix == ".png":
+    if suffix in (".png", ".gif"):
         with Image.open(path) as im:
             info["width"], info["height"] = im.size
     elif suffix == ".mp4" and which("ffprobe"):
@@ -2349,7 +2566,7 @@ def _daily_gfs(today: date, out_dir: Path) -> tuple[Path, dict]:
     return draw_gfs_chart(fields, today, out_dir / "gfs_chart.png")
 
 
-def mode_daily(repo: Path, today: date, out_dir: Path, image: str = "gfs") -> tuple[list[Path], dict]:
+def mode_daily(repo: Path, today: date, out_dir: Path, image: str = "gfs", gfs_loop: bool = False) -> tuple[list[Path], dict]:
     locs = fetch_towns(forecast_days=16)
     town_rows = []
     for name, loc in zip(TOWN_NAMES, locs):
@@ -2399,6 +2616,17 @@ def mode_daily(repo: Path, today: date, out_dir: Path, image: str = "gfs") -> tu
     if image != "none" and not extra_files:
         warnings.append("No second image; post today_chart.png only")
 
+    # Optional extra: hourly GFS animation (never allowed to break the run)
+    loop_meta: dict | None = None
+    loop_files: list[Path] = []
+    if gfs_loop:
+        try:
+            loop_files, loop_meta = build_gfs_loop(today, out_dir)
+        except Exception as exc:  # noqa: BLE001
+            msg = f"gfs loop failed: {exc}"
+            log(f"WARNING: {msg}")
+            warnings.append(msg)
+
     avg = average_daily(town_rows)
     forecast = {
         "date": today.isoformat(),
@@ -2442,15 +2670,16 @@ def mode_daily(repo: Path, today: date, out_dir: Path, image: str = "gfs") -> tu
             "gfs" if gfs_meta is not None else ("satellite" if sat_meta is not None else None)
         ),
         "gfs": gfs_meta,
+        "gfs_loop": loop_meta,
         "satellite": sat_meta,
         "credits": [c for c in (
             "Data: Open-Meteo",
-            GFS_CREDIT if gfs_meta is not None else None,
+            GFS_CREDIT if (gfs_meta is not None or loop_meta is not None) else None,
             "Imagery: NASA Worldview/GIBS" if sat_meta is not None else None,
         ) if c],
         "warnings": warnings,
     }
-    return [chart, *extra_files], forecast
+    return [chart, *extra_files, *loop_files], forecast
 
 
 def _days_from_towns(locs: list[dict], days: list[date]) -> list[dict]:
@@ -2575,6 +2804,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Second image on the daily post (default: gfs model chart, falls back to satellite)",
     )
     p.add_argument(
+        "--gfs-loop",
+        action="store_true",
+        help="Daily mode: also make gfs_loop.mp4 (+ gfs_loop.gif if < 8 MB), hourly GFS "
+             "pressure & rain frames 12:00-16:00 UK time. Off by default; failure only warns.",
+    )
+    p.add_argument(
         "--date",
         metavar="YYYY-MM-DD",
         help="Daily mode only: build the daily graphics for this date instead of today",
@@ -2608,7 +2843,7 @@ def main(argv: list[str] | None = None) -> int:
         log(f"mode={args.mode}  today={today.isoformat()}  out={out_dir}")
 
         if args.mode == "daily":
-            files, forecast = mode_daily(repo, today, out_dir, image=args.daily_image)
+            files, forecast = mode_daily(repo, today, out_dir, image=args.daily_image, gfs_loop=args.gfs_loop)
         elif args.mode == "7day":
             files, forecast = mode_7day(repo, today, start, out_dir)
         else:
