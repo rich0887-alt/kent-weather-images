@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Kent Weather Facebook graphics pipeline.
 
-Generate daily, 7-day and 10-day forecast graphics from live Open-Meteo and
-NASA GIBS data, publish them to the public GitHub repo, and print a JSON
+Generate daily, 7-day and 10-day forecast graphics from live Open-Meteo,
+NOAA GFS and NASA GIBS data, publish them to the public GitHub repo, and print a JSON
 summary of the public raw URLs and the figures used in the graphics.
 
 Usage:
@@ -12,6 +12,14 @@ Usage:
   /workspace/kent-weather/.venv/bin/python /workspace/kent-weather/generate.py 10day
 
 Optional flags:
+  --daily-image {gfs,satellite,both,none}
+                Second image on the daily post. Default gfs = NOAA GFS model
+                chart (gfs_chart.png: MSLP isobars + precipitation rate at 12:00
+                UK time); if GFS fails it falls back to the NASA satellite image,
+                and if that fails too the post has today_chart.png only (see
+                "warnings" in the JSON).
+  --date YYYY-MM-DD
+                Daily mode only: build the daily graphics for another date
   --repo PATH   Path to the kent-weather-images git repo
   --no-push     Generate files but do not commit or push
   --no-prune    Do not delete posts/ folders older than 30 days
@@ -1275,6 +1283,499 @@ def compose_satellite(
 
 
 # ---------------------------------------------------------------------------
+# NOAA GFS model chart (MSLP isobars + precipitation rate)
+# ---------------------------------------------------------------------------
+
+GFS_NOMADS_FILTER = "https://nomads.ncep.noaa.gov/cgi-bin/filter_gfs_0p25.pl"
+GFS_NOMADS_PROD = "https://nomads.ncep.noaa.gov/pub/data/nccf/com/gfs/prod"
+GFS_AWS = "https://noaa-gfs-bdp-pds.s3.amazonaws.com"
+GFS_CREDIT = "Data: NOAA GFS"
+# Download box (a bit wider than the drawn map so projected corners are filled)
+GFS_FETCH = {"toplat": 66, "bottomlat": 40, "leftlon": -24, "rightlon": 20}
+# Drawn map extent (lon0, lon1, lat0, lat1) in a Lambert conformal projection
+GFS_EXTENT = (-10.5, 7.5, 48.4, 59.6)
+GFS_CARTOPY_DIR = Path("/workspace/kent-weather/cartopy_data")
+GFS_W, GFS_H = 1080, 1350
+GFS_RAIN_LEVELS = [0.2, 0.5, 1, 2, 4, 8, 16, 32, 200]
+GFS_RAIN_COLOURS = [
+    "#7FC3EC",  # 0.2  light rain / drizzle
+    "#3E9BE0",  # 0.5
+    "#1F6FC5",  # 1
+    "#1E9E57",  # 2
+    "#9CCB2E",  # 4
+    "#F6C82F",  # 8
+    "#F2801E",  # 16
+    "#D7263D",  # 32+
+]
+GFS_SNOW_COLOURS = [
+    "#E7DDF6", "#CDB8EE", "#B094E3", "#9470D6", "#7B4FC6", "#6236AD", "#4B2390", "#371571",
+]
+GFS_MAP_CITIES = [
+    # name, lon, lat, label dx, dy (points), ha
+    ("London", -0.13, 51.51, -6, 7, "right"),
+    ("Paris", 2.35, 48.86, 6, 5, "left"),
+    ("Dublin", -6.26, 53.35, -6, 5, "right"),
+    ("Edinburgh", -3.19, 55.95, 6, 5, "left"),
+    ("Manchester", -2.24, 53.48, 6, 4, "left"),
+    ("Amsterdam", 4.90, 52.37, 6, 4, "left"),
+    ("Cardiff", -3.18, 51.48, -6, 5, "right"),
+]
+KENT_POINT = (0.85, 51.22)  # roughly the middle of Kent
+
+
+def gfs_valid_time(day: date, hour_local: int = 12) -> datetime:
+    """UTC valid time for `hour_local`:00 UK time on `day` (12:00 GMT / 12:00 BST)."""
+    from datetime import timezone
+
+    local = datetime(day.year, day.month, day.day, hour_local, 0, tzinfo=TZ)
+    return local.astimezone(timezone.utc)
+
+
+def gfs_run_candidates(now_utc: datetime, n: int = 6) -> list[datetime]:
+    base = now_utc.replace(minute=0, second=0, microsecond=0)
+    base = base.replace(hour=(base.hour // 6) * 6)
+    return [base - timedelta(hours=6 * i) for i in range(n)]
+
+
+def _gfs_names(run: datetime, fh: int) -> tuple[str, str, str]:
+    ymd = run.strftime("%Y%m%d")
+    hh = run.strftime("%H")
+    return ymd, hh, f"gfs.t{hh}z.pgrb2.0p25.f{fh:03d}"
+
+
+def _gfs_fetch_nomads(run: datetime, fh: int) -> bytes | None:
+    ymd, hh, fname = _gfs_names(run, fh)
+    idx = f"{GFS_NOMADS_PROD}/gfs.{ymd}/{hh}/atmos/{fname}.idx"
+    try:
+        r = requests.get(idx, timeout=20, headers={"User-Agent": USER_AGENT})
+    except requests.RequestException as exc:
+        log(f"    NOMADS idx check failed: {exc}")
+        return None
+    if r.status_code != 200:
+        log(f"    NOMADS: {fname} ({ymd} {hh}Z) not available yet (HTTP {r.status_code})")
+        return None
+    params = {
+        "dir": f"/gfs.{ymd}/{hh}/atmos",
+        "file": fname,
+        "var_PRMSL": "on", "var_PRATE": "on", "var_CSNOW": "on", "var_TMP": "on",
+        "lev_mean_sea_level": "on", "lev_surface": "on",
+        "lev_2_m_above_ground": "on", "lev_850_mb": "on",
+        "subregion": "", **{k: str(v) for k, v in GFS_FETCH.items()},
+    }
+    for attempt in range(1, 4):
+        try:
+            resp = requests.get(GFS_NOMADS_FILTER, params=params, timeout=60,
+                                headers={"User-Agent": USER_AGENT})
+            if resp.status_code == 200 and resp.content[:4] == b"GRIB":
+                return resp.content
+            log(f"    NOMADS filter HTTP {resp.status_code} (attempt {attempt})")
+        except requests.RequestException as exc:
+            log(f"    NOMADS filter failed (attempt {attempt}): {exc}")
+        time.sleep(2 * attempt)
+    return None
+
+
+_GFS_AWS_WANTED = [
+    ("PRMSL", "mean sea level", None),
+    ("PRATE", "surface", "instant"),
+    ("CSNOW", "surface", "instant"),
+    ("TMP", "2 m above ground", None),
+    ("TMP", "850 mb", None),
+]
+
+
+def _gfs_fetch_aws(run: datetime, fh: int) -> bytes | None:
+    """Byte-range download of the needed GRIB messages from NOAA's open-data bucket."""
+    ymd, hh, fname = _gfs_names(run, fh)
+    base = f"{GFS_AWS}/gfs.{ymd}/{hh}/atmos/{fname}"
+    try:
+        r = requests.get(base + ".idx", timeout=20, headers={"User-Agent": USER_AGENT})
+    except requests.RequestException as exc:
+        log(f"    AWS idx failed: {exc}")
+        return None
+    if r.status_code != 200:
+        log(f"    AWS: {fname} ({ymd} {hh}Z) not available (HTTP {r.status_code})")
+        return None
+    lines = [ln.split(":") for ln in r.text.strip().splitlines()]
+    chunks = []
+    for i, parts in enumerate(lines):
+        if len(parts) < 6:
+            continue
+        var, lev, step = parts[3], parts[4], parts[5]
+        for wvar, wlev, wstep in _GFS_AWS_WANTED:
+            if var == wvar and lev == wlev and (wstep is None or "ave" not in step):
+                start = int(parts[1])
+                end = int(lines[i + 1][1]) - 1 if i + 1 < len(lines) else ""
+                try:
+                    resp = requests.get(base, timeout=60, headers={
+                        "User-Agent": USER_AGENT, "Range": f"bytes={start}-{end}"})
+                except requests.RequestException as exc:
+                    log(f"    AWS range failed: {exc}")
+                    return None
+                if resp.status_code not in (200, 206):
+                    return None
+                chunks.append(resp.content)
+                break
+    return b"".join(chunks) if chunks else None
+
+
+def _gfs_decode(blob: bytes) -> dict[str, np.ndarray]:
+    import pygrib
+
+    with tempfile.NamedTemporaryFile(suffix=".grb2") as tmp:
+        tmp.write(blob)
+        tmp.flush()
+        grbs = pygrib.open(tmp.name)
+        out: dict[str, np.ndarray] = {}
+        lat0, lat1 = GFS_FETCH["bottomlat"], GFS_FETCH["toplat"]
+        lon0, lon1 = GFS_FETCH["leftlon"], GFS_FETCH["rightlon"]
+        for m in grbs:
+            name = m.shortName
+            step = getattr(m, "stepType", "instant")
+            if step != "instant":
+                continue
+            if name == "prmsl":
+                key = "mslp"
+            elif name == "prate":
+                key = "prate"
+            elif name == "csnow":
+                key = "csnow"
+            elif name in ("2t", "t") and m.typeOfLevel == "heightAboveGround":
+                key = "t2m"
+            elif name == "t" and m.typeOfLevel == "isobaricInhPa" and int(m.level) == 850:
+                key = "t850"
+            else:
+                continue
+            if key in out:
+                continue
+            vals = m.values
+            lats, lons = m.latlons()
+            lons = np.where(lons > 180, lons - 360, lons)
+            # Subset / reorder to the fetch box (AWS messages are global)
+            lat_ok = (lats[:, 0] >= lat0) & (lats[:, 0] <= lat1)
+            vals, lats, lons = vals[lat_ok], lats[lat_ok], lons[lat_ok]
+            order = np.argsort(lons[0])
+            vals, lats, lons = vals[:, order], lats[:, order], lons[:, order]
+            lon_ok = (lons[0] >= lon0) & (lons[0] <= lon1)
+            vals, lats, lons = vals[:, lon_ok], lats[:, lon_ok], lons[:, lon_ok]
+            if lats[0, 0] > lats[-1, 0]:
+                vals, lats, lons = vals[::-1], lats[::-1], lons[::-1]
+            out[key] = np.ma.filled(np.asarray(vals, dtype=float), np.nan)
+            out.setdefault("lats", lats[:, 0].copy())
+            out.setdefault("lons", lons[0].copy())
+        grbs.close()
+    if "mslp" not in out or "prate" not in out:
+        raise PipelineError("GFS GRIB is missing MSLP or precipitation rate")
+    return out
+
+
+def fetch_gfs(day: date, hour_local: int = 12, now_utc: datetime | None = None) -> dict[str, Any]:
+    """Fetch the newest GFS run that covers `hour_local` on `day`.
+
+    Tries the latest cycle first and steps back 6 h at a time (GFS appears
+    on NOMADS roughly 3.5-5 h after the cycle time), NOMADS first then the
+    NOAA open-data bucket on AWS.
+    """
+    from datetime import timezone
+
+    now_utc = now_utc or datetime.now(timezone.utc)
+    valid = gfs_valid_time(day, hour_local)
+    errors = []
+    for run in gfs_run_candidates(now_utc):
+        fh = int((valid - run).total_seconds() // 3600)
+        if fh < 0:
+            continue
+        if fh > 384 or (fh > 120 and fh % 3):
+            errors.append(f"{run:%d %HZ}: f{fh} out of range")
+            continue
+        for source, fetcher in (("NOMADS", _gfs_fetch_nomads), ("AWS", _gfs_fetch_aws)):
+            log(f"  GFS {run:%Y-%m-%d %H}Z +{fh}h via {source}")
+            blob = fetcher(run, fh)
+            if not blob:
+                errors.append(f"{run:%d %HZ}+{fh} {source}: unavailable")
+                continue
+            try:
+                fields = _gfs_decode(blob)
+            except Exception as exc:  # noqa: BLE001
+                log(f"    decode failed: {exc}")
+                errors.append(f"{run:%d %HZ}+{fh} {source}: decode failed ({exc})")
+                continue
+            fields.update({
+                "run": run, "fh": fh, "valid": valid, "source": source,
+            })
+            return fields
+    raise PipelineError("No usable GFS run found: " + "; ".join(errors[-6:]))
+
+
+def _gfs_find_extrema(mslp_s: np.ndarray, lats: np.ndarray, lons: np.ndarray, extent) -> list[tuple[str, float, float, float]]:
+    from scipy.ndimage import maximum_filter, minimum_filter
+
+    size = 29  # ~7 degrees window
+    lon0, lon1, lat0, lat1 = extent
+    LON, LAT = np.meshgrid(lons, lats)
+    inside = (LON > lon0 + 0.8) & (LON < lon1 - 0.8) & (LAT > lat0 + 0.6) & (LAT < lat1 - 0.6)
+    out = []
+    for kind, filt in (("H", maximum_filter), ("L", minimum_filter)):
+        ext = filt(mslp_s, size=size, mode="nearest") == mslp_s
+        ys, xs = np.where(ext & inside)
+        picks = []
+        for y, x in sorted(zip(ys, xs), key=lambda p: mslp_s[p] * (-1 if kind == "H" else 1)):
+            lon, lat = LON[y, x], LAT[y, x]
+            if any(abs(lon - a) < 4 and abs(lat - b) < 3 for _, a, b, _ in picks):
+                continue
+            # Skip flat "extrema" in a uniform field
+            win = mslp_s[max(0, y - 14): y + 15, max(0, x - 14): x + 15]
+            if (win.max() - win.min()) < 3:
+                continue
+            picks.append((kind, lon, lat, float(mslp_s[y, x])))
+        out += picks[:3]
+    return out
+
+
+def render_gfs_map(fields: dict[str, Any]) -> tuple[Image.Image, dict[str, Any]]:
+    """Render the map panel (RGB PIL image) with cartopy."""
+    import cartopy
+
+    cartopy.config["data_dir"] = str(GFS_CARTOPY_DIR)
+    import cartopy.crs as ccrs
+    import cartopy.feature as cfeature
+    from matplotlib.colors import BoundaryNorm, ListedColormap
+    from scipy.ndimage import gaussian_filter
+
+    lats, lons = fields["lats"], fields["lons"]
+    mslp = fields["mslp"] / 100.0
+    mslp_s = gaussian_filter(mslp, sigma=2.0, mode="nearest")
+    rate = fields["prate"] * 3600.0  # kg m-2 s-1 -> mm/h
+    rate = gaussian_filter(rate, sigma=0.8, mode="nearest")
+    snow = fields.get("csnow")
+    snow_mask = (snow > 0.5) if snow is not None else np.zeros_like(rate, dtype=bool)
+
+    proj = ccrs.LambertConformal(central_longitude=-1.5, central_latitude=54.0,
+                                 standard_parallels=(50, 58))
+    pc = ccrs.PlateCarree()
+    map_w, map_h = GFS_W, 950
+    fig = plt.figure(figsize=(map_w / 100, map_h / 100), dpi=100)
+    ax = fig.add_axes([0, 0, 1, 1], projection=proj)
+    ax.set_extent(GFS_EXTENT, crs=pc)
+    # Make the axes fill the panel exactly; extend the extent to the panel aspect
+    x0, x1, y0, y1 = ax.get_extent(crs=proj)
+    cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+    want = map_w / map_h
+    w, h = x1 - x0, y1 - y0
+    if w / h < want:
+        w = h * want
+    else:
+        h = w / want
+    ax.set_extent((cx - w / 2, cx + w / 2, cy - h / 2, cy + h / 2), crs=proj)
+    ax.set_facecolor(SEA)
+    ax.add_feature(cfeature.NaturalEarthFeature("physical", "land", "50m"),
+                   facecolor=LAND, edgecolor="none", zorder=1)
+    ax.add_feature(cfeature.NaturalEarthFeature("physical", "lakes", "50m"),
+                   facecolor=SEA, edgecolor="none", zorder=1)
+
+    cmap_r = ListedColormap(GFS_RAIN_COLOURS)
+    cmap_s = ListedColormap(GFS_SNOW_COLOURS)
+    norm = BoundaryNorm(GFS_RAIN_LEVELS, cmap_r.N)
+    rain_only = np.where(~snow_mask, rate, np.nan)
+    snow_only = np.where(snow_mask, rate, np.nan)
+    ax.contourf(lons, lats, rain_only, levels=GFS_RAIN_LEVELS, cmap=cmap_r, norm=norm,
+                transform=pc, zorder=2, alpha=0.88, extend="max")
+    LON2, LAT2 = np.meshgrid(lons, lats)
+    in_view = ((LON2 >= GFS_EXTENT[0]) & (LON2 <= GFS_EXTENT[1])
+               & (LAT2 >= GFS_EXTENT[2]) & (LAT2 <= GFS_EXTENT[3]))
+    has_snow = bool(((snow_mask & (rate >= GFS_RAIN_LEVELS[0]) & in_view).mean()) > 0.003)
+    if has_snow:
+        ax.contourf(lons, lats, snow_only, levels=GFS_RAIN_LEVELS, cmap=cmap_s, norm=norm,
+                    transform=pc, zorder=2, alpha=0.9, extend="max")
+
+    ax.add_feature(cfeature.NaturalEarthFeature("physical", "coastline", "50m"),
+                   facecolor="none", edgecolor="#4A5A68", linewidth=0.9, zorder=3)
+    ax.add_feature(cfeature.NaturalEarthFeature("cultural", "admin_0_boundary_lines_land", "50m"),
+                   facecolor="none", edgecolor="#8A97A3", linewidth=0.6, linestyle=(0, (3, 2)), zorder=3)
+
+    # Isobars every 4 hPa, 1000 hPa slightly heavier
+    lo = int(np.floor(np.nanmin(mslp_s) / 4) * 4)
+    hi = int(np.ceil(np.nanmax(mslp_s) / 4) * 4)
+    levels = list(range(lo, hi + 1, 4))
+    widths = [1.9 if lv == 1000 else 1.25 for lv in levels]
+    cs = ax.contour(lons, lats, mslp_s, levels=levels, colors=NAVY_DEEP, linewidths=widths,
+                    transform=pc, zorder=4)
+    # Several labels per isobar (clabel's default only labels each line once)
+    import contourpy
+
+    vx0, vx1, vy0, vy1 = ax.get_extent(crs=proj)
+    mx, my = (vx1 - vx0) * 0.06, (vy1 - vy0) * 0.06
+    spacing = (vx1 - vx0) * 0.38
+    gen = contourpy.contour_generator(lons, lats, mslp_s)
+    manual = []
+    for lv in levels:
+        for seg in gen.lines(lv):
+            if len(seg) < 4:
+                continue
+            pts = proj.transform_points(pc, seg[:, 0], seg[:, 1])[:, :2]
+            ok = (pts[:, 0] > vx0 + mx) & (pts[:, 0] < vx1 - mx) & (pts[:, 1] > vy0 + my) & (pts[:, 1] < vy1 - my)
+            vis = pts[ok]
+            if len(vis) < 4:
+                continue
+            d = np.concatenate([[0], np.cumsum(np.hypot(*np.diff(vis, axis=0).T))])
+            if d[-1] < spacing * 0.35:
+                continue
+            n = max(1, int(d[-1] // spacing))
+            for k in range(n):
+                target = d[-1] * (k + 0.5) / n
+                j = int(np.searchsorted(d, target))
+                j = min(j, len(vis) - 1)
+                manual.append((float(vis[j, 0]), float(vis[j, 1])))
+    try:
+        labels = ax.clabel(cs, levels=levels, fmt="%d", inline=True, inline_spacing=6,
+                           fontsize=12, manual=manual) if manual else []
+    except Exception as exc:  # noqa: BLE001
+        log(f"    manual isobar labels failed ({exc}); using defaults")
+        labels = ax.clabel(cs, levels=levels, fmt="%d", inline=True, inline_spacing=6, fontsize=12)
+    for t in labels:
+        t.set_fontproperties(fp("semibold", 12.5))
+        t.set_color(NAVY_DEEP)
+        t.set_path_effects([patheffects.withStroke(linewidth=3, foreground="white")])
+
+    # Highs and lows
+    extent_ll = GFS_EXTENT
+    centres = _gfs_find_extrema(mslp_s, lats, lons, (extent_ll[0] - 2, extent_ll[1] + 2,
+                                                     extent_ll[2] - 1, extent_ll[3] + 1))
+    vx0, vx1, vy0, vy1 = ax.get_extent(crs=proj)
+    mx, my = (vx1 - vx0) * 0.05, (vy1 - vy0) * 0.06
+    visible = []
+    for c in centres:
+        px, py = proj.transform_point(c[1], c[2], pc)
+        if vx0 + mx < px < vx1 - mx and vy0 + my < py < vy1 - my:
+            visible.append(c)
+    centres = visible
+    for kind, lon, lat, val in centres:
+        col = "#1F5FA8" if kind == "H" else "#C0392B"
+        ax.text(lon, lat, kind, transform=pc, ha="center", va="center", zorder=7,
+                fontproperties=fp("bold", 34), color=col, clip_on=True,
+                path_effects=[patheffects.withStroke(linewidth=4, foreground="white")])
+        ax.text(lon, lat, f"\n\n{val:.0f}", transform=pc, ha="center", va="center", zorder=7,
+                fontproperties=fp("bold", 14), color=col, clip_on=True,
+                path_effects=[patheffects.withStroke(linewidth=3, foreground="white")])
+
+    # Orientation cities
+    for name, lon, lat, dx, dy, ha in GFS_MAP_CITIES:
+        ax.plot(lon, lat, "o", ms=4.5, mfc="#3A4A58", mec="white", mew=1.0, transform=pc, zorder=8)
+        ax.annotate(name, (lon, lat), xycoords=pc._as_mpl_transform(ax), xytext=(dx, dy),
+                    textcoords="offset points", ha=ha, va="bottom", zorder=8,
+                    fontproperties=fp("medium", 12.5), color="#2E3E4C",
+                    path_effects=[patheffects.withStroke(linewidth=3, foreground="white")])
+    # Kent marker
+    klon, klat = KENT_POINT
+    ax.plot(klon, klat, marker="o", ms=17, mfc="none", mec="#F4B400", mew=3.2, transform=pc, zorder=9)
+    ax.plot(klon, klat, marker="o", ms=6, mfc="#F4B400", mec=NAVY_DEEP, mew=1.0, transform=pc, zorder=9)
+    ax.annotate("KENT", (klon, klat), xycoords=pc._as_mpl_transform(ax), xytext=(13, -5),
+                textcoords="offset points", ha="left", va="top", zorder=9,
+                fontproperties=fp("bold", 16), color=NAVY_DEEP,
+                bbox=dict(boxstyle="round,pad=0.25", fc="#F4B400", ec=NAVY_DEEP, lw=1.2))
+
+    ax.spines["geo"].set_visible(False)
+    from io import BytesIO
+
+    buf = BytesIO()
+    fig.savefig(buf, format="png", dpi=100)
+    plt.close(fig)
+    buf.seek(0)
+    panel = Image.open(buf).convert("RGB")
+    if panel.size != (map_w, map_h):
+        panel = panel.resize((map_w, map_h), Image.Resampling.LANCZOS)
+
+    # Kent value summary for metadata
+    iy = int(np.argmin(np.abs(lats - klat)))
+    ix = int(np.argmin(np.abs(lons - klon)))
+    meta = {
+        "kent_mslp_hpa": round(float(mslp[iy, ix]), 1),
+        "kent_precip_rate_mm_h": round(float(fields["prate"][iy, ix] * 3600.0), 2),
+        "has_snow": has_snow,
+        "centres": [
+            {"type": k, "lon": round(float(a), 2), "lat": round(float(b), 2), "hpa": round(v)}
+            for k, a, b, v in centres
+        ],
+    }
+    return panel, meta
+
+
+def _draw_rate_legend(draw: ImageDraw.ImageDraw, x: int, y: int, colours: list[str], title: str, show_ticks: bool) -> int:
+    seg_w, seg_h = 92, 18
+    draw.text((x, y), title, font=pil_font("semibold", 19), fill=NAVY_RGB)
+    y += 32
+    for i, col in enumerate(colours):
+        x0 = x + i * seg_w
+        rgb = tuple(int(col[j: j + 2], 16) for j in (1, 3, 5))
+        draw.rectangle((x0, y, x0 + seg_w - 3, y + seg_h), fill=rgb)
+    if show_ticks:
+        tf = pil_font("medium", 15)
+        ticks = ["0.2", "0.5", "1", "2", "4", "8", "16", "32+"]
+        for i, t in enumerate(ticks):
+            draw.text((x + i * seg_w, y + seg_h + 4), t, font=tf, fill=MUTED_RGB)
+    return y + seg_h + (28 if show_ticks else 6)
+
+
+def draw_gfs_chart(fields: dict[str, Any], day: date, path: Path) -> tuple[Path, dict[str, Any]]:
+    panel, meta = render_gfs_map(fields)
+    img = Image.new("RGB", (GFS_W, GFS_H), SOFT_RGB)
+    draw = ImageDraw.Draw(img)
+
+    header_h = 198
+    valid_local = fields["valid"].astimezone(TZ)
+    zone = valid_local.tzname() or "UK"
+    draw.rectangle((0, 0, GFS_W, header_h), fill=NAVY_RGB)
+    draw.rectangle((0, header_h - 4, GFS_W, header_h), fill=TEAL_RGB)
+    draw.text((56, 28), "Kent Weather", font=pil_font("bold", 54), fill=(255, 255, 255))
+    draw.text((56, 96), "GFS model: pressure & rain", font=pil_font("medium", 28), fill=(200, 230, 228))
+    draw.text(
+        (56, 140),
+        f"{format_long_date(day)}  ·  {valid_local:%H:%M} {zone}",
+        font=pil_font("regular", 22), fill=(190, 210, 220),
+    )
+    # Badge: model run
+    run = fields["run"]
+    badge = f"{run:%HZ} run  ·  T+{fields['fh']}"
+    bf = pil_font("semibold", 18)
+    tb = draw.textbbox((0, 0), badge, font=bf)
+    bw = tb[2] - tb[0] + 28
+    bx1 = GFS_W - 48
+    draw.rounded_rectangle((bx1 - bw, 40, bx1, 76), radius=18, fill=TEAL_RGB)
+    draw.text((bx1 - bw + 14, 40 + (36 - (tb[3] - tb[1])) / 2 - tb[1]), badge, font=bf, fill=(255, 255, 255))
+
+    map_y = header_h
+    img.paste(panel, (0, map_y))
+    draw.line((0, map_y + panel.size[1], GFS_W, map_y + panel.size[1]), fill=(200, 212, 222), width=2)
+
+    y = map_y + panel.size[1] + 22
+    if meta["has_snow"]:
+        y = _draw_rate_legend(draw, 56, y, GFS_RAIN_COLOURS, "Rain (mm per hour)", True)
+        y = _draw_rate_legend(draw, 56, y - 4, GFS_SNOW_COLOURS, "Snow", False)
+    else:
+        y = _draw_rate_legend(draw, 56, y, GFS_RAIN_COLOURS, "Rain and showers (mm per hour)", True)
+    y += 8
+    draw.text((56, y), "Lines: sea-level pressure (hPa)  ·  H = high, L = low  ·  closer lines = windier",
+              font=pil_font("regular", 17), fill=INK_RGB)
+    fy = GFS_H - 34
+    draw.text((56, fy), f"{GFS_CREDIT}  ·  run {run:%d %b %H}Z UTC  ·  raw computer model output",
+              font=pil_font("regular", 15), fill=MUTED_RGB)
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    img.save(path, "PNG", optimize=True)
+    log(f"wrote {path} {img.size}")
+    meta.update({
+        "model": "NOAA GFS 0.25°",
+        "run_utc": run.strftime("%Y-%m-%dT%H:%MZ"),
+        "forecast_hour": fields["fh"],
+        "valid_utc": fields["valid"].strftime("%Y-%m-%dT%H:%MZ"),
+        "valid_local": valid_local.isoformat(),
+        "source": fields["source"],
+        "credit": GFS_CREDIT,
+    })
+    return path, meta
+
+
+# ---------------------------------------------------------------------------
 # Animated rain / temperature map
 # ---------------------------------------------------------------------------
 
@@ -1825,7 +2326,30 @@ def emit_summary(summary: dict) -> None:
 # Modes
 # ---------------------------------------------------------------------------
 
-def mode_daily(repo: Path, today: date, out_dir: Path) -> tuple[list[Path], dict]:
+def _daily_satellite(today: date, out_dir: Path) -> tuple[Path, dict]:
+    log("Fetching NASA GIBS true-colour satellite image…")
+    raw, sat_date, layer_id, layer_label, fell_back = find_latest_satellite(today)
+    sat_path = out_dir / "satellite.png"
+    compose_satellite(
+        raw, sat_date, layer_label,
+        requested=today, fell_back=fell_back, path=sat_path,
+    )
+    return sat_path, {
+        "date": sat_date.isoformat(),
+        "layer": layer_id,
+        "layer_label": layer_label,
+        "fell_back": fell_back,
+        "credit": "Imagery: NASA Worldview/GIBS",
+    }
+
+
+def _daily_gfs(today: date, out_dir: Path) -> tuple[Path, dict]:
+    log("Fetching NOAA GFS model data (MSLP + precipitation rate)…")
+    fields = fetch_gfs(today, hour_local=12)
+    return draw_gfs_chart(fields, today, out_dir / "gfs_chart.png")
+
+
+def mode_daily(repo: Path, today: date, out_dir: Path, image: str = "gfs") -> tuple[list[Path], dict]:
     locs = fetch_towns(forecast_days=16)
     town_rows = []
     for name, loc in zip(TOWN_NAMES, locs):
@@ -1850,13 +2374,30 @@ def mode_daily(repo: Path, today: date, out_dir: Path) -> tuple[list[Path], dict
     chart = out_dir / "today_chart.png"
     draw_daily_chart(town_rows, period_rows, today, chart)
 
-    log("Fetching NASA GIBS true-colour satellite image…")
-    raw, sat_date, layer_id, layer_label, fell_back = find_latest_satellite(today)
-    sat_path = out_dir / "satellite.png"
-    compose_satellite(
-        raw, sat_date, layer_label,
-        requested=today, fell_back=fell_back, path=sat_path,
-    )
+    # Second image: GFS model chart by default, satellite as fallback (or by flag)
+    extra_files: list[Path] = []
+    warnings: list[str] = []
+    gfs_meta: dict | None = None
+    sat_meta: dict | None = None
+    order = {"gfs": ["gfs", "satellite"], "satellite": ["satellite"], "both": ["gfs", "satellite"],
+             "none": []}[image]
+    for kind in order:
+        if kind == "satellite" and image == "gfs" and gfs_meta is not None:
+            break  # GFS worked, no fallback needed
+        try:
+            if kind == "gfs":
+                pth, gfs_meta = _daily_gfs(today, out_dir)
+            else:
+                pth, sat_meta = _daily_satellite(today, out_dir)
+            extra_files.append(pth)
+        except Exception as exc:  # noqa: BLE001 - never let the second image kill the post
+            msg = f"{kind} image failed: {exc}"
+            log(f"WARNING: {msg}")
+            warnings.append(msg)
+    if image == "gfs" and gfs_meta is None and sat_meta is not None:
+        warnings.append("GFS chart unavailable; used the satellite image instead")
+    if image != "none" and not extra_files:
+        warnings.append("No second image; post today_chart.png only")
 
     avg = average_daily(town_rows)
     forecast = {
@@ -1897,15 +2438,19 @@ def mode_daily(repo: Path, today: date, out_dir: Path) -> tuple[list[Path], dict
             }
             for p in period_rows
         ],
-        "satellite": {
-            "date": sat_date.isoformat(),
-            "layer": layer_id,
-            "layer_label": layer_label,
-            "fell_back": fell_back,
-            "credit": "Imagery: NASA Worldview/GIBS",
-        },
+        "second_image": (
+            "gfs" if gfs_meta is not None else ("satellite" if sat_meta is not None else None)
+        ),
+        "gfs": gfs_meta,
+        "satellite": sat_meta,
+        "credits": [c for c in (
+            "Data: Open-Meteo",
+            GFS_CREDIT if gfs_meta is not None else None,
+            "Imagery: NASA Worldview/GIBS" if sat_meta is not None else None,
+        ) if c],
+        "warnings": warnings,
     }
-    return [chart, sat_path], forecast
+    return [chart, *extra_files], forecast
 
 
 def _days_from_towns(locs: list[dict], days: list[date]) -> list[dict]:
@@ -2023,6 +2568,17 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="YYYY-MM-DD",
         help="7-day window start date (default: tomorrow in Europe/London, i.e. the week ahead)",
     )
+    p.add_argument(
+        "--daily-image",
+        choices=["gfs", "satellite", "both", "none"],
+        default="gfs",
+        help="Second image on the daily post (default: gfs model chart, falls back to satellite)",
+    )
+    p.add_argument(
+        "--date",
+        metavar="YYYY-MM-DD",
+        help="Daily mode only: build the daily graphics for this date instead of today",
+    )
     p.add_argument("--repo", help="Path to the kent-weather-images git repository")
     p.add_argument("--no-push", action="store_true", help="Generate files but do not commit or push")
     p.add_argument("--no-prune", action="store_true", help="Do not delete posts older than 30 days")
@@ -2042,13 +2598,17 @@ def main(argv: list[str] | None = None) -> int:
             start = parse_iso_date(args.start) if args.start else today + timedelta(days=1)
         elif args.start:
             raise PipelineError("--start is only used with the 7day mode")
+        if args.date:
+            if args.mode != "daily":
+                raise PipelineError("--date is only used with the daily mode")
+            today = parse_iso_date(args.date)
 
         out_dir = repo / "posts" / today.isoformat() / args.mode
         out_dir.mkdir(parents=True, exist_ok=True)
         log(f"mode={args.mode}  today={today.isoformat()}  out={out_dir}")
 
         if args.mode == "daily":
-            files, forecast = mode_daily(repo, today, out_dir)
+            files, forecast = mode_daily(repo, today, out_dir, image=args.daily_image)
         elif args.mode == "7day":
             files, forecast = mode_7day(repo, today, start, out_dir)
         else:
@@ -2061,7 +2621,7 @@ def main(argv: list[str] | None = None) -> int:
         sha = None
         if not args.no_push:
             if not args.no_prune:
-                pruned = prune_old_posts(repo, today)
+                pruned = prune_old_posts(repo, today_london())
             if args.mode == "7day":
                 msg = f"Add {today.isoformat()} 7-day graphics ({start.isoformat()}–{(start + timedelta(days=6)).isoformat()})"
             elif args.mode == "10day":
@@ -2086,6 +2646,7 @@ def main(argv: list[str] | None = None) -> int:
             "pruned": pruned,
             "files": file_infos,
             "forecast": forecast,
+            "warnings": forecast.get("warnings", []) if isinstance(forecast, dict) else [],
         }
         emit_summary(summary)
         return 0

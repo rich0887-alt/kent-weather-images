@@ -14,7 +14,8 @@ The generator is `scripts/generate.py`. On this machine a stable wrapper lives a
 VENV=/workspace/kent-weather/.venv/bin/python
 SCRIPT=/workspace/kent-weather/generate.py
 
-# Daily 8am post: today's town chart + latest NASA GIBS UK satellite image
+# Daily 8am post: today's town chart + NOAA GFS model chart (pressure & rain, 12:00 UK time)
+# (--daily-image satellite|both|none to change; GFS failure falls back to the NASA satellite image)
 $VENV $SCRIPT daily
 
 # Sunday week-ahead post: 7-day chart + animated rain/temperature map
@@ -41,12 +42,12 @@ Unless `--no-push` is set, each run does `git pull --rebase`, commits the new fi
 
 | Mode | Files |
 | --- | --- |
-| `daily` | `today_chart.png`, `satellite.png`, `forecast.json` |
+| `daily` | `today_chart.png`, `gfs_chart.png` (or `satellite.png` as fallback), `forecast.json` |
 | `7day` | `forecast_chart.png`, `rain_temp_map.mp4`, `forecast.json` |
 | `10day` | `forecast_chart.png`, `forecast.json` |
 
 Charts are 1080×1080 PNG. The 7-day animation is H.264 `yuv420p` with `+faststart`, about 10–12 seconds and around 1 MB.
 
-Figures always come from live Open-Meteo data (six towns: Ashford, Canterbury, Maidstone, Tunbridge Wells, Folkestone, Margate) in the Europe/London timezone. Satellite imagery is NASA Worldview/GIBS true colour; the script tries today, then falls back to the most recent usable pass.
+Figures always come from live Open-Meteo data (six towns: Ashford, Canterbury, Maidstone, Tunbridge Wells, Folkestone, Margate) in the Europe/London timezone. The daily model chart uses NOAA GFS 0.25° data (MSLP + instantaneous precipitation rate, newest available run, from NOMADS with the NOAA AWS open-data bucket as backup; credit "Data: NOAA GFS"). Satellite imagery (fallback) is NASA Worldview/GIBS true colour; the script tries today, then falls back to the most recent usable pass.
 
 Posts older than 30 days are pruned automatically to keep the repository small.
