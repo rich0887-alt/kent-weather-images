@@ -1,0 +1,126 @@
+{
+  "date": "2026-11-21",
+  "towns": [
+    {
+      "name": "Ashford",
+      "code": 3,
+      "label": "Cloudy",
+      "high_c": 10,
+      "low_c": 2,
+      "rain_chance_pct": 0,
+      "rain_mm": 0.0,
+      "wind_mph": 7,
+      "gusts_mph": 13
+    },
+    {
+      "name": "Canterbury",
+      "code": 3,
+      "label": "Cloudy",
+      "high_c": 9,
+      "low_c": 0,
+      "rain_chance_pct": 0,
+      "rain_mm": 0.0,
+      "wind_mph": 5,
+      "gusts_mph": 12
+    },
+    {
+      "name": "Maidstone",
+      "code": 3,
+      "label": "Cloudy",
+      "high_c": 10,
+      "low_c": 2,
+      "rain_chance_pct": 2,
+      "rain_mm": 0.0,
+      "wind_mph": 7,
+      "gusts_mph": 13
+    },
+    {
+      "name": "Tunbridge Wells",
+      "code": 3,
+      "label": "Cloudy",
+      "high_c": 9,
+      "low_c": 1,
+      "rain_chance_pct": 2,
+      "rain_mm": 0.0,
+      "wind_mph": 7,
+      "gusts_mph": 16
+    },
+    {
+      "name": "Folkestone",
+      "code": 3,
+      "label": "Cloudy",
+      "high_c": 9,
+      "low_c": 4,
+      "rain_chance_pct": 0,
+      "rain_mm": 0.0,
+      "wind_mph": 11,
+      "gusts_mph": 21
+    },
+    {
+      "name": "Margate",
+      "code": 3,
+      "label": "Cloudy",
+      "high_c": 10,
+      "low_c": 1,
+      "rain_chance_pct": 0,
+      "rain_mm": 0.0,
+      "wind_mph": 11,
+      "gusts_mph": 18
+    }
+  ],
+  "county_average": {
+    "code": 3,
+    "label": "Cloudy",
+    "high_c": 9,
+    "low_c": 2,
+    "rain_chance_pct": 1,
+    "rain_mm": 0.0,
+    "wind_mph": 8,
+    "gusts_mph": 16
+  },
+  "periods": [
+    {
+      "name": "Morning",
+      "hours": "06:00-12:00",
+      "code": 3,
+      "label": "Cloudy",
+      "temp_c": 4,
+      "temp_range_c": [
+        0,
+        9
+      ],
+      "rain_chance_pct": 2
+    },
+    {
+      "name": "Afternoon",
+      "hours": "12:00-18:00",
+      "code": 0,
+      "label": "Clear",
+      "temp_c": 8,
+      "temp_range_c": [
+        6,
+        10
+      ],
+      "rain_chance_pct": 0
+    },
+    {
+      "name": "Evening",
+      "hours": "18:00-24:00",
+      "code": 0,
+      "label": "Clear",
+      "temp_c": 7,
+      "temp_range_c": [
+        4,
+        8
+      ],
+      "rain_chance_pct": 0
+    }
+  ],
+  "satellite": {
+    "date": "2026-11-20",
+    "layer": "MODIS_Terra_CorrectedReflectance_TrueColor",
+    "layer_label": "MODIS Terra true colour",
+    "fell_back": true,
+    "credit": "Imagery: NASA Worldview/GIBS"
+  }
+}
