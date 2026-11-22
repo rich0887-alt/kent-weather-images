@@ -1,0 +1,87 @@
+{
+  "start": "2026-11-23",
+  "end": "2026-11-29",
+  "days": [
+    {
+      "date": "2026-11-23",
+      "code": 3,
+      "label": "Cloudy",
+      "high_c": 6,
+      "low_c": 2,
+      "rain_chance_pct": 6,
+      "rain_mm": 0.0
+    },
+    {
+      "date": "2026-11-24",
+      "code": 3,
+      "label": "Cloudy",
+      "high_c": 7,
+      "low_c": 2,
+      "rain_chance_pct": 23,
+      "rain_mm": 0.0
+    },
+    {
+      "date": "2026-11-25",
+      "code": 51,
+      "label": "Light drizzle",
+      "high_c": 6,
+      "low_c": 3,
+      "rain_chance_pct": 37,
+      "rain_mm": 1.9
+    },
+    {
+      "date": "2026-11-26",
+      "code": 51,
+      "label": "Light drizzle",
+      "high_c": 5,
+      "low_c": 1,
+      "rain_chance_pct": 2,
+      "rain_mm": 0.1
+    },
+    {
+      "date": "2026-11-27",
+      "code": 53,
+      "label": "Drizzle",
+      "high_c": 4,
+      "low_c": 1,
+      "rain_chance_pct": 17,
+      "rain_mm": 1.7
+    },
+    {
+      "date": "2026-11-28",
+      "code": 53,
+      "label": "Drizzle",
+      "high_c": 7,
+      "low_c": 3,
+      "rain_chance_pct": 21,
+      "rain_mm": 6.0
+    },
+    {
+      "date": "2026-11-29",
+      "code": 71,
+      "label": "Light snow",
+      "high_c": 4,
+      "low_c": 2,
+      "rain_chance_pct": 34,
+      "rain_mm": 3.5
+    }
+  ],
+  "animation": {
+    "frame_count": 56,
+    "first": "2026-11-23T00:00",
+    "last": "2026-11-29T21:00",
+    "peak_rain_mm_h": 1.8,
+    "peak_rain_at": "2026-11-28T15:00",
+    "temp_min": -3.0,
+    "temp_max": 10.3,
+    "temp_scale": [
+      -4.0,
+      12.0
+    ],
+    "rain_scale_max": 2.5,
+    "bytes": 1086267,
+    "duration_s": 10.5,
+    "fps": 6,
+    "frames": 63
+  }
+}
