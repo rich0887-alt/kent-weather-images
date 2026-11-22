@@ -51,3 +51,21 @@ Charts are 1080×1080 PNG. The 7-day animation is H.264 `yuv420p` with `+faststa
 Figures always come from live Open-Meteo data (six towns: Ashford, Canterbury, Maidstone, Tunbridge Wells, Folkestone, Margate) in the Europe/London timezone. The daily model chart uses NOAA GFS 0.25° data (MSLP + instantaneous precipitation rate, newest available run, from NOMADS with the NOAA AWS open-data bucket as backup; credit "Data: NOAA GFS"). Satellite imagery (fallback) is NASA Worldview/GIBS true colour; the script tries today, then falls back to the most recent usable pass.
 
 Posts older than 30 days are pruned automatically to keep the repository small.
+
+## GFS animation windows (`gfsloop` mode)
+
+```bash
+$VENV $SCRIPT gfsloop --start 08 --end 12   # Morning 08:00–12:00 (5 frames)
+$VENV $SCRIPT gfsloop --start 12 --end 16   # Afternoon 12:00–16:00 (5 frames)
+$VENV $SCRIPT gfsloop --start 16 --end 22   # Evening 16:00–22:00 (7 frames)
+# optional: --date YYYY-MM-DD (default today, Europe/London); hours are UK local time (GMT/BST aware)
+```
+
+Output: `posts/<date>/gfsloop-HH00-HH00/gfs_loop.mp4` (+ `gfs_loop.gif` if < 8 MB) and `forecast.json`.
+All frames come from one GFS run (newest run that has every frame; NOMADS then AWS).
+
+## Git publishing
+
+Every run takes an exclusive lock (`.git/kw-generate.lock`), commits its own outputs plus any
+leftover generated files under `posts/`, then `git pull --rebase --autostash` and pushes, retrying
+up to 3 times (with a stash fallback and automatic abort of half-finished rebases).
