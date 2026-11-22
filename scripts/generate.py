@@ -11,6 +11,9 @@ Usage:
   /workspace/kent-weather/.venv/bin/python /workspace/kent-weather/generate.py 7day --start YYYY-MM-DD
   /workspace/kent-weather/.venv/bin/python /workspace/kent-weather/generate.py 10day
 
+  /workspace/kent-weather/.venv/bin/python /workspace/kent-weather/generate.py gfsloop --start 08 --end 12 [--date YYYY-MM-DD]
+      -> posts/<date>/gfsloop-0800-1200/gfs_loop.mp4 (+ gfs_loop.gif); hours are UK local time
+
 Optional flags:
   --daily-image {gfs,satellite,both,none}
                 Second image on the daily post. Default gfs = NOAA GFS model
@@ -317,6 +320,17 @@ def parse_iso_date(s: str) -> date:
         return date.fromisoformat(s)
     except ValueError as exc:
         raise PipelineError(f"Invalid date {s!r}; use YYYY-MM-DD") from exc
+
+
+def parse_hour(s: str) -> int:
+    """'8', '08', '08:00' -> 8 (UK local hour, 0-23)."""
+    try:
+        h = int(str(s).strip().split(":")[0])
+    except ValueError as exc:
+        raise PipelineError(f"Bad hour {s!r}; use HH, e.g. 08") from exc
+    if not 0 <= h <= 23:
+        raise PipelineError(f"Hour {h} out of range 0-23")
+    return h
 
 
 def daterange(start: date, n: int) -> list[date]:
@@ -1776,6 +1790,7 @@ def draw_gfs_chart(
     levels: list[int] | None = None,
     frame: tuple[int, int] | None = None,
     snow_legend: bool | None = None,
+    caption: str = "hour by hour",
 ) -> tuple[Path, dict[str, Any]]:
     """Draw the GFS pressure & rain chart. With `frame=(i, n)` it draws an
     animation frame: big valid-time clock + progress dots in the header."""
@@ -1807,7 +1822,7 @@ def draw_gfs_chart(
         draw.text((bx1 - bw + 14, 40 + (36 - (tb[3] - tb[1])) / 2 - tb[1]), badge, font=bf, fill=(255, 255, 255))
     else:
         i, n = frame
-        draw.text((56, 140), f"{format_long_date(day)}  ·  hour by hour",
+        draw.text((56, 140), f"{format_long_date(day)}  ·  {caption}",
                   font=pil_font("regular", 22), fill=(190, 210, 220))
         # Big clock, right-aligned, fixed position so it never jumps
         bx1 = GFS_W - 48
@@ -1874,13 +1889,32 @@ GFS_LOOP_MP4_PASSES = 2  # play the sequence twice in the MP4 (GIF loops forever
 GFS_LOOP_GIF_MAX = 8_000_000
 
 
-def build_gfs_loop(day: date, out_dir: Path, *, gif: bool = True) -> tuple[list[Path], dict[str, Any]]:
-    """Hourly GFS pressure & rain animation (12:00-16:00 UK time, one run)."""
+def gfs_window_label(start_h: int, end_h: int) -> str:
+    """'Morning 08:00–12:00' style caption for a loop window (UK local hours)."""
+    if start_h < 12:
+        part = "Morning"
+    elif start_h < 16:
+        part = "Afternoon"
+    else:
+        part = "Evening"
+    return f"{part} {start_h:02d}:00–{end_h:02d}:00"
+
+
+def build_gfs_loop(
+    day: date,
+    out_dir: Path,
+    *,
+    gif: bool = True,
+    hours: list[int] | None = None,
+) -> tuple[list[Path], dict[str, Any]]:
+    """Hourly GFS pressure & rain animation (default 12:00-16:00 UK time), all frames from one run."""
     from scipy.ndimage import gaussian_filter
 
+    hours = list(hours or GFS_LOOP_HOURS)
+    caption = gfs_window_label(hours[0], hours[-1])
     t0 = time.time()
-    log("Fetching NOAA GFS hourly frames for the loop…")
-    series = fetch_gfs_series(day, GFS_LOOP_HOURS)
+    log(f"Fetching NOAA GFS hourly frames for the loop ({caption})…")
+    series = fetch_gfs_series(day, hours)
     levels = gfs_isobar_levels([gaussian_filter(f["mslp"] / 100.0, sigma=2.0, mode="nearest") for f in series])
     # Snow legend fixed across frames (shown if any frame has meaningful snow)
     snow_any = False
@@ -1891,7 +1925,7 @@ def build_gfs_loop(day: date, out_dir: Path, *, gif: bool = True) -> tuple[list[
         frame_paths, metas = [], []
         for i, f in enumerate(series):
             pth, meta = draw_gfs_chart(f, day, tmpd / f"frame_{i:02d}.png", levels=levels, frame=(i, n),
-                                       snow_legend=False)
+                                       snow_legend=False, caption=caption)
             frame_paths.append(pth)
             metas.append(meta)
         if any(m["has_snow"] for m in metas):
@@ -1899,7 +1933,7 @@ def build_gfs_loop(day: date, out_dir: Path, *, gif: bool = True) -> tuple[list[
             frame_paths, metas = [], []
             for i, f in enumerate(series):
                 pth, meta = draw_gfs_chart(f, day, tmpd / f"frame_{i:02d}.png", levels=levels, frame=(i, n),
-                                           snow_legend=True)
+                                           snow_legend=True, caption=caption)
                 frame_paths.append(pth)
                 metas.append(meta)
 
@@ -1971,6 +2005,9 @@ def build_gfs_loop(day: date, out_dir: Path, *, gif: bool = True) -> tuple[list[
             pass
     run = series[0]["run"]
     meta = {
+        "window": caption,
+        "start_local": series[0]["valid"].astimezone(TZ).isoformat(),
+        "end_local": series[-1]["valid"].astimezone(TZ).isoformat(),
         "run_utc": run.strftime("%Y-%m-%dT%H:%MZ"),
         "source": sorted({f["source"] for f in series}),
         "frames": [
@@ -2422,31 +2459,134 @@ def prune_old_posts(repo: Path, today: date, keep_days: int = 30) -> list[str]:
     return removed
 
 
-def publish_repo(repo: Path, paths: list[Path], message: str, prune: list[str]) -> str:
-    ensure_git_identity(repo)
-    log("git pull --rebase")
+class RepoLock:
+    """Exclusive lock so back-to-back / overlapping runs never touch the repo at once."""
+
+    def __init__(self, repo: Path, timeout_s: int = 900):
+        self.path = repo / ".git" / "kw-generate.lock"
+        self.timeout_s = timeout_s
+        self.fh = None
+
+    def __enter__(self):
+        import fcntl
+
+        self.fh = open(self.path, "w")
+        deadline = time.time() + self.timeout_s
+        waited = False
+        while True:
+            try:
+                fcntl.flock(self.fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if not waited:
+                    log("another generate.py run holds the repo lock; waiting…")
+                    waited = True
+                if time.time() > deadline:
+                    raise PipelineError(f"Timed out after {self.timeout_s}s waiting for the repo lock")
+                time.sleep(2)
+        self.fh.write(f"{os.getpid()}\n")
+        self.fh.flush()
+        return self
+
+    def __exit__(self, *exc):
+        import fcntl
+
+        try:
+            fcntl.flock(self.fh, fcntl.LOCK_UN)
+        finally:
+            self.fh.close()
+        return False
+
+
+def _git_busy_cleanup(repo: Path) -> None:
+    """Abort a rebase/merge left half-done by an earlier crashed run."""
+    gd = repo / ".git"
+    if (gd / "rebase-merge").exists() or (gd / "rebase-apply").exists():
+        log("  aborting a leftover rebase")
+        git_run(repo, ["rebase", "--abort"], check=False)
+    if (gd / "MERGE_HEAD").exists():
+        log("  aborting a leftover merge")
+        git_run(repo, ["merge", "--abort"], check=False)
+    stale = gd / "index.lock"
+    if stale.exists() and time.time() - stale.stat().st_mtime > 300:
+        log("  removing stale .git/index.lock")
+        stale.unlink(missing_ok=True)
+
+
+def _git_sync(repo: Path) -> None:
+    """Rebase local commits onto origin/main, coping with a dirty tree."""
+    pull = git_run(repo, ["pull", "--rebase", "--autostash", "origin", "main"], check=False)
+    if pull.returncode == 0:
+        return
+    log(f"  pull --rebase --autostash failed: {(pull.stderr or pull.stdout).strip()[:300]}")
+    _git_busy_cleanup(repo)
+    # Fall back: stash everything (incl. untracked), pull, then restore
+    st = git_run(repo, ["stash", "push", "--include-untracked", "-m", "kw-generate auto-stash"], check=False)
+    stashed = st.returncode == 0 and "No local changes" not in st.stdout
     pull = git_run(repo, ["pull", "--rebase", "origin", "main"], check=False)
     if pull.returncode != 0:
+        _git_busy_cleanup(repo)
+        if stashed:
+            git_run(repo, ["stash", "pop"], check=False)
         raise PipelineError(f"git pull --rebase failed:\n{pull.stderr or pull.stdout}")
-    rels = []
+    if stashed:
+        pop = git_run(repo, ["stash", "pop"], check=False)
+        if pop.returncode != 0:
+            # Keep the remote version; leave the stash for a human rather than a dirty tree
+            git_run(repo, ["checkout", "--", "."], check=False)
+            log("  WARNING: could not re-apply stashed leftovers; kept in `git stash list`")
+
+
+def publish_repo(repo: Path, paths: list[Path], message: str, prune: list[str]) -> str:
+    """Commit this run's outputs (and any leftover generated files under posts/), then
+    rebase onto origin/main and push, retrying. Leaves posts/ clean on success.
+
+    Caller should hold RepoLock.
+    """
+    ensure_git_identity(repo)
+    _git_busy_cleanup(repo)
     for p in paths:
         rel = p.resolve().relative_to(repo.resolve())
         git_run(repo, ["add", "--", str(rel)])
-        rels.append(str(rel))
     for rel in prune:
-        git_run(repo, ["add", "-u", "--", rel])
-    # Also pick up scripts / docs if they were edited as part of this working tree
-    status = git_run(repo, ["status", "--porcelain"])
-    if not status.stdout.strip():
+        git_run(repo, ["add", "-A", "--", rel])
+    # Sweep up generated outputs left by earlier --no-push or failed runs so the tree is clean
+    if (repo / "posts").exists():
+        git_run(repo, ["add", "-A", "--", "posts"])
+    staged = git_run(repo, ["diff", "--cached", "--quiet"], check=False)
+    if staged.returncode != 0:
+        git_run(repo, ["commit", "-m", message])
+        log(f"committed {git_run(repo, ['rev-parse', '--short', 'HEAD']).stdout.strip()}")
+    else:
         log("nothing new to commit")
-        return git_run(repo, ["rev-parse", "HEAD"]).stdout.strip()
-    git_run(repo, ["commit", "-m", message])
-    sha = git_run(repo, ["rev-parse", "HEAD"]).stdout.strip()
-    log(f"git push origin main ({sha[:8]})")
-    push = git_run(repo, ["push", "origin", "main"], check=False)
-    if push.returncode != 0:
-        raise PipelineError(f"git push failed:\n{push.stderr or push.stdout}")
-    return sha
+
+    last_err = ""
+    for attempt in range(1, 4):
+        log(f"git sync + push (attempt {attempt}/3)")
+        try:
+            _git_sync(repo)
+        except PipelineError as exc:
+            last_err = str(exc)
+            time.sleep(3 * attempt)
+            continue
+        ahead = git_run(repo, ["rev-list", "--count", "origin/main..HEAD"], check=False).stdout.strip()
+        if ahead == "0":
+            log("  already up to date with origin/main")
+            last_err = ""
+            break
+        push = git_run(repo, ["push", "origin", "HEAD:main"], check=False)
+        if push.returncode == 0:
+            last_err = ""
+            break
+        last_err = push.stderr or push.stdout
+        log(f"  push failed: {last_err.strip()[:300]}")
+        time.sleep(3 * attempt)
+    if last_err:
+        raise PipelineError(f"git push failed after 3 attempts:\n{last_err}")
+    leftover = git_run(repo, ["status", "--porcelain", "--", "posts"]).stdout.strip()
+    if leftover:
+        log(f"  WARNING: posts/ still has uncommitted changes:\n{leftover}")
+    return git_run(repo, ["rev-parse", "HEAD"]).stdout.strip()
 
 
 def verify_raw_urls(urls: list[str], timeout_s: int = 60) -> None:
@@ -2695,6 +2835,21 @@ def _days_from_towns(locs: list[dict], days: list[date]) -> list[dict]:
     return out
 
 
+def mode_gfsloop(day: date, out_dir: Path, hours: list[int]) -> tuple[list[Path], dict]:
+    """Standalone GFS animation for one window (no daily charts)."""
+    files, meta = build_gfs_loop(day, out_dir, hours=hours)
+    warnings = []
+    if not meta.get("gif", {}).get("made"):
+        warnings.append(f"GIF not made: {meta.get('gif', {}).get('reason', 'unknown')}")
+    forecast = {
+        "date": day.isoformat(),
+        "gfs_loop": meta,
+        "credits": [GFS_CREDIT],
+        "warnings": warnings,
+    }
+    return files, forecast
+
+
 def mode_7day(repo: Path, today: date, start: date, out_dir: Path) -> tuple[list[Path], dict]:
     end = start + timedelta(days=6)
     if start < today:
@@ -2791,11 +2946,16 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description="Generate Kent Weather Facebook graphics and publish them to GitHub."
     )
-    p.add_argument("mode", choices=["daily", "7day", "10day"], help="Which graphic set to build")
+    p.add_argument("mode", choices=["daily", "7day", "10day", "gfsloop"], help="Which graphic set to build")
     p.add_argument(
         "--start",
-        metavar="YYYY-MM-DD",
-        help="7-day window start date (default: tomorrow in Europe/London, i.e. the week ahead)",
+        metavar="YYYY-MM-DD|HH",
+        help="7day: window start date (default: tomorrow). gfsloop: first frame hour, UK local time (e.g. 08)",
+    )
+    p.add_argument(
+        "--end",
+        metavar="HH",
+        help="gfsloop: last frame hour, UK local time (e.g. 12). Frames are hourly from --start to --end inclusive",
     )
     p.add_argument(
         "--daily-image",
@@ -2812,7 +2972,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--date",
         metavar="YYYY-MM-DD",
-        help="Daily mode only: build the daily graphics for this date instead of today",
+        help="daily / gfsloop: build for this date instead of today (Europe/London)",
     )
     p.add_argument("--repo", help="Path to the kent-weather-images git repository")
     p.add_argument("--no-push", action="store_true", help="Generate files but do not commit or push")
@@ -2822,23 +2982,41 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    lock: RepoLock | None = None
     try:
         check_fonts()
         repo = default_repo(args.repo)
+        # One run at a time touches the repo (generation + commit + push)
+        lock = RepoLock(repo).__enter__()
         today = today_london()
         generated_at = datetime.now(TZ)
 
         start = None
+        loop_hours: list[int] | None = None
         if args.mode == "7day":
             start = parse_iso_date(args.start) if args.start else today + timedelta(days=1)
+        elif args.mode == "gfsloop":
+            if not args.start or not args.end:
+                raise PipelineError("gfsloop needs --start HH and --end HH (UK local hours)")
+            h0, h1 = parse_hour(args.start), parse_hour(args.end)
+            if h1 <= h0:
+                raise PipelineError("--end must be after --start")
+            if h1 - h0 > 12:
+                raise PipelineError("gfsloop window is limited to 12 hours")
+            loop_hours = list(range(h0, h1 + 1))
         elif args.start:
-            raise PipelineError("--start is only used with the 7day mode")
+            raise PipelineError("--start is only used with the 7day and gfsloop modes")
+        if args.end and args.mode != "gfsloop":
+            raise PipelineError("--end is only used with the gfsloop mode")
         if args.date:
-            if args.mode != "daily":
-                raise PipelineError("--date is only used with the daily mode")
+            if args.mode not in ("daily", "gfsloop"):
+                raise PipelineError("--date is only used with the daily and gfsloop modes")
             today = parse_iso_date(args.date)
 
-        out_dir = repo / "posts" / today.isoformat() / args.mode
+        folder = args.mode
+        if args.mode == "gfsloop":
+            folder = f"gfsloop-{loop_hours[0]:02d}00-{loop_hours[-1]:02d}00"
+        out_dir = repo / "posts" / today.isoformat() / folder
         out_dir.mkdir(parents=True, exist_ok=True)
         log(f"mode={args.mode}  today={today.isoformat()}  out={out_dir}")
 
@@ -2846,6 +3024,8 @@ def main(argv: list[str] | None = None) -> int:
             files, forecast = mode_daily(repo, today, out_dir, image=args.daily_image, gfs_loop=args.gfs_loop)
         elif args.mode == "7day":
             files, forecast = mode_7day(repo, today, start, out_dir)
+        elif args.mode == "gfsloop":
+            files, forecast = mode_gfsloop(today, out_dir, loop_hours)
         else:
             files, forecast = mode_10day(repo, today, out_dir)
 
@@ -2861,6 +3041,8 @@ def main(argv: list[str] | None = None) -> int:
                 msg = f"Add {today.isoformat()} 7-day graphics ({start.isoformat()}–{(start + timedelta(days=6)).isoformat()})"
             elif args.mode == "10day":
                 msg = f"Add {today.isoformat()} 10-day graphics"
+            elif args.mode == "gfsloop":
+                msg = f"Add {today.isoformat()} GFS loop {loop_hours[0]:02d}:00-{loop_hours[-1]:02d}:00"
             else:
                 msg = f"Add {today.isoformat()} daily graphics"
             sha = publish_repo(repo, files + [out_dir / "forecast.json"], msg, pruned)
@@ -2887,11 +3069,16 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     except PipelineError as exc:
         log(f"ERROR: {exc}")
+        emit_summary({"ok": False, "mode": args.mode, "error": str(exc)})
         return 1
     except Exception as exc:
         log(f"ERROR: unexpected failure: {exc}")
         traceback.print_exc(file=sys.stderr)
+        emit_summary({"ok": False, "mode": args.mode, "error": f"unexpected failure: {exc}"})
         return 1
+    finally:
+        if lock is not None:
+            lock.__exit__(None, None, None)
 
 
 if __name__ == "__main__":
