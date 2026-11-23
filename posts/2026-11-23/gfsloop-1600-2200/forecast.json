@@ -4,44 +4,44 @@
     "window": "Evening 16:00\u201322:00",
     "start_local": "2026-11-23T16:00:00+00:00",
     "end_local": "2026-11-23T22:00:00+00:00",
-    "run_utc": "2026-11-22T06:00Z",
+    "run_utc": "2026-11-23T06:00Z",
     "source": [
       "NOMADS"
     ],
     "frames": [
       {
         "valid_local": "2026-11-23T16:00:00+00:00",
-        "forecast_hour": 34
+        "forecast_hour": 10
       },
       {
         "valid_local": "2026-11-23T17:00:00+00:00",
-        "forecast_hour": 35
+        "forecast_hour": 11
       },
       {
         "valid_local": "2026-11-23T18:00:00+00:00",
-        "forecast_hour": 36
+        "forecast_hour": 12
       },
       {
         "valid_local": "2026-11-23T19:00:00+00:00",
-        "forecast_hour": 37
+        "forecast_hour": 13
       },
       {
         "valid_local": "2026-11-23T20:00:00+00:00",
-        "forecast_hour": 38
+        "forecast_hour": 14
       },
       {
         "valid_local": "2026-11-23T21:00:00+00:00",
-        "forecast_hour": 39
+        "forecast_hour": 15
       },
       {
         "valid_local": "2026-11-23T22:00:00+00:00",
-        "forecast_hour": 40
+        "forecast_hour": 16
       }
     ],
     "frame_seconds": 0.9,
     "last_frame_seconds": 2.0,
     "mp4": {
-      "bytes": 911803,
+      "bytes": 842822,
       "duration_s": 14.8,
       "passes": 2,
       "fps": 10,
@@ -52,19 +52,18 @@
     },
     "gif": {
       "made": true,
-      "bytes": 540136
+      "bytes": 512344
     },
     "isobar_levels_hpa": [
-      984,
+      988,
       1036
     ],
     "snow_legend": false,
     "credit": "Data: NOAA GFS",
-    "seconds_taken": 12.8
+    "seconds_taken": 13.1
   },
   "credits": [
     "Data: NOAA GFS"
   ],
   "warnings": []
 }
-
