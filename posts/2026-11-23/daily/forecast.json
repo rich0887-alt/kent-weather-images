@@ -3,47 +3,47 @@
   "towns": [
     {
       "name": "Ashford",
-      "code": 2,
-      "label": "Partly cloudy",
+      "code": 3,
+      "label": "Cloudy",
       "high_c": 6,
       "low_c": 2,
-      "rain_chance_pct": 4,
+      "rain_chance_pct": 0,
       "rain_mm": 0.0,
-      "wind_mph": 8,
-      "gusts_mph": 16
+      "wind_mph": 9,
+      "gusts_mph": 17
     },
     {
       "name": "Canterbury",
       "code": 3,
       "label": "Cloudy",
       "high_c": 6,
-      "low_c": 0,
-      "rain_chance_pct": 4,
+      "low_c": 1,
+      "rain_chance_pct": 0,
       "rain_mm": 0.0,
-      "wind_mph": 8,
-      "gusts_mph": 17
+      "wind_mph": 9,
+      "gusts_mph": 19
     },
     {
       "name": "Maidstone",
       "code": 3,
       "label": "Cloudy",
-      "high_c": 7,
-      "low_c": 2,
-      "rain_chance_pct": 2,
+      "high_c": 6,
+      "low_c": 1,
+      "rain_chance_pct": 0,
       "rain_mm": 0.0,
-      "wind_mph": 7,
-      "gusts_mph": 14
+      "wind_mph": 9,
+      "gusts_mph": 17
     },
     {
       "name": "Tunbridge Wells",
-      "code": 2,
-      "label": "Partly cloudy",
-      "high_c": 6,
-      "low_c": -1,
+      "code": 3,
+      "label": "Cloudy",
+      "high_c": 5,
+      "low_c": 0,
       "rain_chance_pct": 2,
       "rain_mm": 0.0,
-      "wind_mph": 7,
-      "gusts_mph": 16
+      "wind_mph": 8,
+      "gusts_mph": 17
     },
     {
       "name": "Folkestone",
@@ -51,21 +51,21 @@
       "label": "Cloudy",
       "high_c": 7,
       "low_c": 4,
-      "rain_chance_pct": 1,
+      "rain_chance_pct": 0,
       "rain_mm": 0.0,
-      "wind_mph": 12,
-      "gusts_mph": 24
+      "wind_mph": 14,
+      "gusts_mph": 27
     },
     {
       "name": "Margate",
       "code": 3,
       "label": "Cloudy",
       "high_c": 7,
-      "low_c": 4,
-      "rain_chance_pct": 1,
+      "low_c": 3,
+      "rain_chance_pct": 0,
       "rain_mm": 0.0,
-      "wind_mph": 13,
-      "gusts_mph": 23
+      "wind_mph": 14,
+      "gusts_mph": 24
     }
   ],
   "county_average": {
@@ -73,10 +73,10 @@
     "label": "Cloudy",
     "high_c": 6,
     "low_c": 2,
-    "rain_chance_pct": 2,
+    "rain_chance_pct": 0,
     "rain_mm": 0.0,
-    "wind_mph": 9,
-    "gusts_mph": 18
+    "wind_mph": 10,
+    "gusts_mph": 20
   },
   "periods": [
     {
@@ -84,10 +84,10 @@
       "hours": "06:00-12:00",
       "code": 0,
       "label": "Clear",
-      "temp_c": 5,
+      "temp_c": 4,
       "temp_range_c": [
-        -1,
-        7
+        0,
+        6
       ],
       "rain_chance_pct": 0
     },
@@ -98,10 +98,10 @@
       "label": "Clear",
       "temp_c": 5,
       "temp_range_c": [
-        1,
-        7
+        2,
+        6
       ],
-      "rain_chance_pct": 2
+      "rain_chance_pct": 0
     },
     {
       "name": "Evening",
@@ -110,34 +110,34 @@
       "label": "Clear",
       "temp_c": 3,
       "temp_range_c": [
-        0,
+        1,
         5
       ],
-      "rain_chance_pct": 4
+      "rain_chance_pct": 2
     }
   ],
   "second_image": "gfs",
   "gfs": {
-    "kent_mslp_hpa": 1025.5,
+    "kent_mslp_hpa": 1025.7,
     "kent_precip_rate_mm_h": 0.0,
     "has_snow": false,
     "centres": [
       {
         "type": "H",
-        "lon": 4.5,
-        "lat": 52.25,
+        "lon": 4.0,
+        "lat": 51.75,
         "hpa": 1026
       },
       {
         "type": "L",
-        "lon": 4.0,
-        "lat": 58.25,
-        "hpa": 1022
+        "lon": 2.75,
+        "lat": 58.75,
+        "hpa": 1023
       }
     ],
     "model": "NOAA GFS 0.25\u00b0",
-    "run_utc": "2026-11-22T06:00Z",
-    "forecast_hour": 30,
+    "run_utc": "2026-11-23T00:00Z",
+    "forecast_hour": 12,
     "valid_utc": "2026-11-23T12:00Z",
     "valid_local": "2026-11-23T12:00:00+00:00",
     "source": "NOMADS",
