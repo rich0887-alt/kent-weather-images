@@ -1,0 +1,107 @@
+{
+  "start": "2026-11-26",
+  "end": "2026-12-05",
+  "low_confidence_from": "2026-12-03",
+  "days": [
+    {
+      "date": "2026-11-26",
+      "code": 3,
+      "label": "Cloudy",
+      "high_c": 5,
+      "low_c": 1,
+      "rain_chance_pct": 3,
+      "rain_mm": 0.0,
+      "lower_confidence": false
+    },
+    {
+      "date": "2026-11-27",
+      "code": 3,
+      "label": "Cloudy",
+      "high_c": 4,
+      "low_c": 1,
+      "rain_chance_pct": 8,
+      "rain_mm": 0.0,
+      "lower_confidence": false
+    },
+    {
+      "date": "2026-11-28",
+      "code": 61,
+      "label": "Light rain",
+      "high_c": 10,
+      "low_c": 4,
+      "rain_chance_pct": 87,
+      "rain_mm": 2.0,
+      "lower_confidence": false
+    },
+    {
+      "date": "2026-11-29",
+      "code": 55,
+      "label": "Drizzle",
+      "high_c": 10,
+      "low_c": 7,
+      "rain_chance_pct": 47,
+      "rain_mm": 3.8,
+      "lower_confidence": false
+    },
+    {
+      "date": "2026-11-30",
+      "code": 3,
+      "label": "Cloudy",
+      "high_c": 11,
+      "low_c": 7,
+      "rain_chance_pct": 4,
+      "rain_mm": 0.0,
+      "lower_confidence": false
+    },
+    {
+      "date": "2026-12-01",
+      "code": 51,
+      "label": "Light drizzle",
+      "high_c": 10,
+      "low_c": 8,
+      "rain_chance_pct": 50,
+      "rain_mm": 0.1,
+      "lower_confidence": false
+    },
+    {
+      "date": "2026-12-02",
+      "code": 51,
+      "label": "Light drizzle",
+      "high_c": 12,
+      "low_c": 6,
+      "rain_chance_pct": 62,
+      "rain_mm": 1.2,
+      "lower_confidence": false
+    },
+    {
+      "date": "2026-12-03",
+      "code": 45,
+      "label": "Fog",
+      "high_c": 9,
+      "low_c": 3,
+      "rain_chance_pct": 25,
+      "rain_mm": 0.0,
+      "lower_confidence": true
+    },
+    {
+      "date": "2026-12-04",
+      "code": 3,
+      "label": "Cloudy",
+      "high_c": 6,
+      "low_c": 4,
+      "rain_chance_pct": 10,
+      "rain_mm": 0.0,
+      "lower_confidence": true
+    },
+    {
+      "date": "2026-12-05",
+      "code": 3,
+      "label": "Cloudy",
+      "high_c": 8,
+      "low_c": 4,
+      "rain_chance_pct": 19,
+      "rain_mm": 0.0,
+      "lower_confidence": true
+    }
+  ]
+}
