@@ -1,0 +1,69 @@
+{
+  "date": "2026-11-26",
+  "gfs_loop": {
+    "window": "Evening 16:00\u201322:00",
+    "start_local": "2026-11-26T16:00:00+00:00",
+    "end_local": "2026-11-26T22:00:00+00:00",
+    "run_utc": "2026-11-26T12:00Z",
+    "source": [
+      "NOMADS"
+    ],
+    "frames": [
+      {
+        "valid_local": "2026-11-26T16:00:00+00:00",
+        "forecast_hour": 4
+      },
+      {
+        "valid_local": "2026-11-26T17:00:00+00:00",
+        "forecast_hour": 5
+      },
+      {
+        "valid_local": "2026-11-26T18:00:00+00:00",
+        "forecast_hour": 6
+      },
+      {
+        "valid_local": "2026-11-26T19:00:00+00:00",
+        "forecast_hour": 7
+      },
+      {
+        "valid_local": "2026-11-26T20:00:00+00:00",
+        "forecast_hour": 8
+      },
+      {
+        "valid_local": "2026-11-26T21:00:00+00:00",
+        "forecast_hour": 9
+      },
+      {
+        "valid_local": "2026-11-26T22:00:00+00:00",
+        "forecast_hour": 10
+      }
+    ],
+    "frame_seconds": 0.9,
+    "last_frame_seconds": 2.0,
+    "mp4": {
+      "bytes": 908903,
+      "duration_s": 14.8,
+      "passes": 2,
+      "fps": 10,
+      "size": [
+        1080,
+        1350
+      ]
+    },
+    "gif": {
+      "made": true,
+      "bytes": 566338
+    },
+    "isobar_levels_hpa": [
+      948,
+      1036
+    ],
+    "snow_legend": false,
+    "credit": "Data: NOAA GFS",
+    "seconds_taken": 11.0
+  },
+  "credits": [
+    "Data: NOAA GFS"
+  ],
+  "warnings": []
+}
