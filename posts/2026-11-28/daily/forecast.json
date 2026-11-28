@@ -1,0 +1,140 @@
+{
+  "date": "2026-11-28",
+  "towns": [
+    {
+      "name": "Ashford",
+      "code": 61,
+      "label": "Light rain",
+      "high_c": 10,
+      "low_c": 3,
+      "rain_chance_pct": 99,
+      "rain_mm": 7.0,
+      "wind_mph": 16,
+      "gusts_mph": 30
+    },
+    {
+      "name": "Canterbury",
+      "code": 61,
+      "label": "Light rain",
+      "high_c": 10,
+      "low_c": 2,
+      "rain_chance_pct": 99,
+      "rain_mm": 4.8,
+      "wind_mph": 16,
+      "gusts_mph": 30
+    },
+    {
+      "name": "Maidstone",
+      "code": 61,
+      "label": "Light rain",
+      "high_c": 10,
+      "low_c": 4,
+      "rain_chance_pct": 100,
+      "rain_mm": 6.6,
+      "wind_mph": 16,
+      "gusts_mph": 31
+    },
+    {
+      "name": "Tunbridge Wells",
+      "code": 63,
+      "label": "Rain",
+      "high_c": 10,
+      "low_c": 5,
+      "rain_chance_pct": 100,
+      "rain_mm": 11.1,
+      "wind_mph": 14,
+      "gusts_mph": 29
+    },
+    {
+      "name": "Folkestone",
+      "code": 63,
+      "label": "Rain",
+      "high_c": 9,
+      "low_c": 3,
+      "rain_chance_pct": 95,
+      "rain_mm": 7.0,
+      "wind_mph": 17,
+      "gusts_mph": 32
+    },
+    {
+      "name": "Margate",
+      "code": 61,
+      "label": "Light rain",
+      "high_c": 9,
+      "low_c": 2,
+      "rain_chance_pct": 95,
+      "rain_mm": 3.3,
+      "wind_mph": 22,
+      "gusts_mph": 35
+    }
+  ],
+  "county_average": {
+    "code": 61,
+    "label": "Light rain",
+    "high_c": 10,
+    "low_c": 3,
+    "rain_chance_pct": 98,
+    "rain_mm": 6.6,
+    "wind_mph": 17,
+    "gusts_mph": 31
+  },
+  "periods": [
+    {
+      "name": "Morning",
+      "hours": "06:00-12:00",
+      "code": 3,
+      "label": "Cloudy",
+      "temp_c": 4,
+      "temp_range_c": [
+        2,
+        6
+      ],
+      "rain_chance_pct": 16
+    },
+    {
+      "name": "Afternoon",
+      "hours": "12:00-18:00",
+      "code": 51,
+      "label": "Light drizzle",
+      "temp_c": 6,
+      "temp_range_c": [
+        5,
+        8
+      ],
+      "rain_chance_pct": 98
+    },
+    {
+      "name": "Evening",
+      "hours": "18:00-24:00",
+      "code": 51,
+      "label": "Light drizzle",
+      "temp_c": 8,
+      "temp_range_c": [
+        6,
+        10
+      ],
+      "rain_chance_pct": 100
+    }
+  ],
+  "second_image": "gfs",
+  "gfs": {
+    "kent_mslp_hpa": 1019.9,
+    "kent_precip_rate_mm_h": 0.0,
+    "has_snow": false,
+    "centres": [],
+    "model": "NOAA GFS 0.25\u00b0",
+    "run_utc": "2026-11-28T00:00Z",
+    "forecast_hour": 12,
+    "valid_utc": "2026-11-28T12:00Z",
+    "valid_local": "2026-11-28T12:00:00+00:00",
+    "source": "NOMADS",
+    "credit": "Data: NOAA GFS"
+  },
+  "gfs_loop": null,
+  "satellite": null,
+  "credits": [
+    "Data: Open-Meteo",
+    "Data: NOAA GFS"
+  ],
+  "warnings": []
+}
